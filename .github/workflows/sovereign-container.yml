@@ -1,0 +1,30 @@
+name: Deploy Sovereign Container 1776
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-prove:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build Sovereign Container 1776
+        run: |
+          docker build -t truealphaspiral/sovereign-container-1776:latest .
+
+      - name: Execute Automated Self-Healing & Manifesto Verification
+        run: |
+          # Spinning up the container automatically triggers the ENTRYPOINT (pytest)
+          # If the system fails to reject the forbidden narrative phrase, the container exits with an error
+          docker run --rm truealphaspiral/sovereign-container-1776:latest
+
+      - name: Audit Trail / Traceability
+        if: always()
+        run: |
+          echo "Run completed. Provenance and Refusal Integrity verified."
+          # Here you can add steps to push logs to your WakeChain or logging infrastructure

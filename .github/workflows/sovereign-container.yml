@@ -1,4 +1,4 @@
-name: Deploy Sovereign Container 1776
+name: Build and Test Sovereign Container 1776
 
 on:
   push:
@@ -9,6 +9,8 @@ on:
 jobs:
   build-and-prove:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4

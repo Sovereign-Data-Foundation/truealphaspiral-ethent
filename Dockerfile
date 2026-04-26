@@ -10,7 +10,7 @@ WORKDIR /opt/truealphaspiral
 
 # Install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt pytest
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the core architecture
 COPY . .

@@ -267,6 +267,7 @@ class ConsentLedger:
         subject_id: str,
         required_rights: UnalienableRight,
         at: Optional[float] = None,
+        governance_act: Optional[str] = None,
     ) -> Optional[ConsentRecord]:
         """Return the most recent valid consent record covering *required_rights*.
 
@@ -276,6 +277,8 @@ class ConsentLedger:
         2. Its proof is cryptographically intact.
         3. It has not expired.
         4. Its ``rights_granted`` covers every bit in *required_rights*.
+        5. If *governance_act* is supplied, its ``governance_act`` matches exactly
+           (Maxim 21m: consent must be explicitly bound to the authorised act).
 
         Parameters
         ----------
@@ -285,6 +288,10 @@ class ConsentLedger:
             Minimum set of :class:`UnalienableRight` values that must be covered.
         at:
             Evaluation timestamp (defaults to now).
+        governance_act:
+            When provided, only records whose ``governance_act`` matches this
+            string exactly are considered valid.  Passing ``None`` disables
+            act-scoped filtering (backward-compatible, rights-only check).
 
         Returns
         -------
@@ -298,6 +305,8 @@ class ConsentLedger:
             if not rec.is_valid_proof():
                 continue
             if rec.is_expired(at):
+                continue
+            if governance_act is not None and rec.governance_act != governance_act:
                 continue
             if (required_rights & rec.rights_granted) == required_rights:
                 return rec
@@ -314,6 +323,7 @@ def consent_holds(
     subject_id: str,
     required_rights: UnalienableRight,
     at: Optional[float] = None,
+    governance_act: Optional[str] = None,
 ) -> bool:
     """Return True iff valid, informed consent exists for *subject_id*.
 
@@ -331,22 +341,34 @@ def consent_holds(
         The :class:`UnalienableRight` values the act requires consent for.
     at:
         Evaluation timestamp (defaults to now).
+    governance_act:
+        When provided, only records whose ``governance_act`` matches this
+        string exactly are accepted (act-scoped consent check).
 
     Returns
     -------
     bool
         ``True`` iff at least one valid, unexpired consent record exists
-        that covers *required_rights*.
+        that covers *required_rights* (and, if *governance_act* is given,
+        is bound to that specific act).
     """
-    return ledger.find_consent(subject_id, required_rights, at) is not None
+    return ledger.find_consent(subject_id, required_rights, at, governance_act) is not None
 
 
 # ---------------------------------------------------------------------------
 # UVK-compatible Invariant factory
 # ---------------------------------------------------------------------------
 
-_SubjectExtractor = Callable[[Any, Any, Any], Tuple[str, UnalienableRight]]
-"""Callable(state, action, inputs) → (subject_id, required_rights)."""
+_SubjectExtractor = Callable[[Any, Any, Any], Tuple[str, UnalienableRight, Optional[str], Optional[float]]]
+"""Callable(state, action, inputs) → (subject_id, required_rights, governance_act, at).
+
+* ``subject_id``      – the consenting party being checked.
+* ``required_rights`` – minimum :class:`UnalienableRight` bits that must be present.
+* ``governance_act``  – the specific act consent must be bound to, or ``None``
+  for a rights-only (act-unscoped) check.
+* ``at``              – explicit evaluation timestamp for deterministic expiry
+  checking, or ``None`` to fall back to the current wall clock.
+"""
 
 
 def make_consent_invariant(
@@ -366,7 +388,16 @@ def make_consent_invariant(
     ledger:
         The :class:`ConsentLedger` that holds consent records.
     subject_extractor:
-        Pure function ``(state, action, inputs) → (subject_id, required_rights)``.
+        Pure function
+        ``(state, action, inputs) → (subject_id, required_rights, governance_act, at)``.
+
+        * ``governance_act`` – the specific governance act consent must be
+          bound to (Maxim 21m: consent without act-scoping is ambiguous and
+          therefore invalid).  Pass ``None`` for a rights-only check.
+        * ``at`` – explicit evaluation timestamp that makes expiry checking
+          fully deterministic and replayable.  Pass ``None`` to fall back to
+          the current wall clock (non-deterministic; avoid in production).
+
         Must be side-effect-free; it is called inside the UVK hot-path.
     version:
         Invariant version string (bound into the UVK Wrinkle for replay).
@@ -384,15 +415,16 @@ def make_consent_invariant(
         ledger.record_consent("user_1", UnalienableRight.AGENCY, "data_export")
 
         def my_extractor(state, action, inputs):
-            return "user_1", UnalienableRight.AGENCY
+            # Return (subject_id, required_rights, governance_act, at)
+            return "user_1", UnalienableRight.AGENCY, "data_export", None
 
         inv = make_consent_invariant(ledger, my_extractor)
         uvk = UVK(invariants=[inv], ...)
     """
 
     def _check(state: Any, action: Any, inputs: Any) -> bool:
-        subject_id, required_rights = subject_extractor(state, action, inputs)
-        return consent_holds(ledger, subject_id, required_rights)
+        subject_id, required_rights, governance_act, at = subject_extractor(state, action, inputs)
+        return consent_holds(ledger, subject_id, required_rights, at=at, governance_act=governance_act)
 
     return Invariant(
         name    = "digital_rights:consent_required",

@@ -5,6 +5,11 @@
 Set ``OPENAI_API_KEY`` in your environment and execute with ``python
 codex_tas_runner.py``. The script requests a minimal bash recipe from
 GPT-4o-code, runs it, and prints a JSON summary.
+
+Wake-based authentication (§5) is enforced via the UVK: the Codex script
+execution is only admitted if the agent presents a valid capability and all
+declared invariants hold.  Every admitted action is committed to the wake
+chain and its receipt is recorded in ``ledger/artifacts.hash``.
 """
 import importlib
 import importlib.util
@@ -14,6 +19,9 @@ import json
 import hashlib
 import time
 from artifact_guard import run_step
+from wake_chain import reset_default_chain, get_default_chain
+from capability import CapabilityTable, Right
+from uvk import UVK, Invariant
 
 def _require_api_key() -> str:
     """Return the OpenAI API key or raise an informative error."""
@@ -53,7 +61,41 @@ def get_codex_script(openai_client):
     return resp.choices[0].message.content
 
 def run_bash(script: str) -> subprocess.CompletedProcess:
-    """Write the script to a file, run it via ``run_step`` and return the result."""
+    """Write the script to a file, run it via ``run_step`` and return the result.
+
+    Admission control is enforced by the UVK before execution: the script
+    is only run if the ``execute_codex_script`` capability is valid and all
+    declared invariants hold.  If admission is denied the function raises
+    :class:`PermissionError`.
+    """
+    # Build UVK with capability and a basic non-empty-script invariant
+    # Each script execution starts a fresh wake chain (new session/trajectory).
+    # reset_default_chain() is intentional here so that main() can later read
+    # the session chain via get_default_chain().
+    wake = reset_default_chain()
+    cap_table = CapabilityTable()
+    execute_cap = cap_table.retype("execute_codex_script", Right.EXECUTE | Right.MINT)
+
+    non_empty_inv = Invariant(
+        name="script_non_empty",
+        version="1.0.0",
+        check=lambda _state, action, _inputs: bool(action and action.strip()),
+    )
+    uvk = UVK(capability_table=cap_table, wake_chain=wake, invariants=[non_empty_inv])
+
+    result = uvk.admit(
+        capability=execute_cap,
+        required_right=Right.EXECUTE,
+        action=script,
+        inputs={"source": "codex"},
+    )
+    if not result.admitted:
+        raise PermissionError(
+            f"UVK denied execution: {result.status.name} "
+            f"(failed_invariants={result.failed_invariants}, "
+            f"cap_error={result.cap_error})"
+        )
+
     with open("run.sh", "w", encoding="utf-8") as f:
         f.write(script)
     os.chmod("run.sh", 0o755)
@@ -96,6 +138,12 @@ def main() -> None:
         "stdout_tail": result.stdout.splitlines()[-10:],
         "stderr_tail": result.stderr.splitlines()[-10:],
         "audit_hash": hash_val,
+        "wake_chain": {
+            "session_id": get_default_chain().session_id,
+            "receipt_count": len(get_default_chain()),
+            "wake_head": get_default_chain().head.hex(),
+            "chain_valid": get_default_chain().verify(),
+        },
     }
 
     print(json.dumps(report, indent=2))

@@ -69,6 +69,14 @@ class CapabilityError(Exception):
 class Capability:
     """An unforgeable token granting *owner* specific *rights* over *resource*.
 
+    Mutability is intentional: :class:`CapabilityTable` methods
+    (:meth:`~CapabilityTable.revoke`, :meth:`~CapabilityTable.retype`, and
+    :meth:`~CapabilityTable.move`) update ``revoked``, ``rights``, and
+    ``owner`` in-place so that all callers holding a reference to the same
+    capability object always observe the current, authoritative state.
+    External code should treat a :class:`Capability` as an opaque handle and
+    never mutate its fields directly.
+
     Attributes:
         resource: The name or identifier of the protected resource.
         rights:   The set of :class:`Right` flags granted by this capability.

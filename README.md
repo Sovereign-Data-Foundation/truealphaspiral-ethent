@@ -34,6 +34,13 @@ Each execution step is wrapped by `artifact_guard.run_step`, producing JSON
 artifacts under `artifacts/` and recording their hashes in
 `ledger/artifacts.hash`.
 
+## Day One payload steering
+
+The stewarding command for a Day One release handoff is captured in
+[`docs/day-one-payload.md`](docs/day-one-payload.md). It directs an agent to
+verify the repository-local deterministic container proof path before requesting
+merge authorization.
+
 ## Staple-\u03c0 Perspective Intelligence Clause
 
 The “π” glyph binds each linear truth-claim to at least one external

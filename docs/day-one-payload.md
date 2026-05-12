@@ -1,36 +1,63 @@
 # Day One Payload Stewarding Runbook
 
-This runbook translates the Human API Key checkpoint into an executable steering
-command for the first release payload. It treats the human steward's instruction
-as the authenticated seed and keeps the agent bounded to observable repository
-state before any merge or release action.
+This runbook implements PR #158's merged Day One directive. PR #106 is now
+historical substrate only: it can inform context, but it is not the active
+execution target. The active target is receipt-first dispatch of the deterministic
+workflow gate against the current head SHA.
 
 ## Current repository state
 
 - The deterministic container proof path in this repository is
   `.github/workflows/sovereign-container.yml`, which builds the Docker image and
   runs the container self-test on pushes and pull requests targeting `main`.
-- The container entrypoint runs `pytest -v tests/test_manifesto.py`, making the
-  manifesto suite the default proof executed when the image starts.
-- There is no `.github/workflows/release-docker.yaml` file in this checkout, so
-  a release-docker handoff should first resolve whether that pipeline exists on
-  another branch or needs to be introduced in a separate change.
+- The temporary Day One dispatch target is `.github/workflows/blank.yml` until
+  `.github/workflows/release-docker.yaml` is available.
+- The receipt emitter is `scripts/day_one_gate.py`; it emits a Wake/UVK-backed
+  receipt before the workflow gate proceeds.
+
+## Fail-closed invariants
+
+The Day One gate must stop on any of the following conditions:
+
+1. missing Day One receipt;
+2. failed receipt invariant;
+3. failed workflow step;
+4. missing sovereign-intent proof;
+5. requested head SHA that differs from the active checked-out head; or
+6. a request for `release-docker.yaml` before that workflow exists.
 
 ## Exact Day One steering command
 
 Paste this into the active agent session:
 
 ```text
-Day One payload: do not merge PR #106 yet. First verify the repository-local
-container proof path. Inspect `.github/workflows/sovereign-container.yml` and
-`Dockerfile`, run the full Python test suite, then run the deterministic Docker
-proof equivalent to the workflow: `docker build -t truealphaspiral/sovereign-container-1776:latest .` followed by `docker run --rm truealphaspiral/sovereign-container-1776:latest`. Report the exact commands, outputs, and any diff before requesting merge authorization. If a `.github/workflows/release-docker.yaml` pipeline is required, stop and propose it as a separate audited patch instead of assuming it exists.
+Day One payload: proceed under PR #158's merged directive. Treat PR #106 as historical substrate only. Resolve the active head SHA with `git rev-parse HEAD`. Emit the Day One receipt first with `python scripts/day_one_gate.py emit --head-sha <ACTIVE_HEAD_SHA> --workflow-name blank.yml --sovereign-intent-proof "PR #158 merged Day One directive" --receipt-path receipts/day-one-receipt.json`, then verify it with `python scripts/day_one_gate.py verify --head-sha <ACTIVE_HEAD_SHA> --workflow-name blank.yml --receipt-path receipts/day-one-receipt.json`. Only after that receipt verifies, dispatch `blank.yml` against the same active head SHA with the same sovereign-intent proof. Fail closed on any missing receipt, failed invariant, failed workflow, or missing sovereign-intent proof. Do not use `release-docker.yaml` until it exists in `.github/workflows/`.
+```
+
+## GitHub dispatch form
+
+Until `release-docker.yaml` is introduced, dispatch the fallback workflow:
+
+```bash
+ACTIVE_HEAD_SHA="$(git rev-parse HEAD)"
+python scripts/day_one_gate.py emit \
+  --head-sha "$ACTIVE_HEAD_SHA" \
+  --workflow-name blank.yml \
+  --sovereign-intent-proof "PR #158 merged Day One directive" \
+  --receipt-path receipts/day-one-receipt.json
+python scripts/day_one_gate.py verify \
+  --head-sha "$ACTIVE_HEAD_SHA" \
+  --workflow-name blank.yml \
+  --receipt-path receipts/day-one-receipt.json
+gh workflow run blank.yml \
+  --ref "$ACTIVE_HEAD_SHA" \
+  -f head_sha="$ACTIVE_HEAD_SHA" \
+  -f sovereign_intent_proof="PR #158 merged Day One directive"
 ```
 
 ## Operational decision
 
-The Day One payload should point at the deterministic container proof path before
-any PR merge. In this checkout, that means the `sovereign-container.yml` workflow
-and its Dockerfile-backed test entrypoint are the admissible first target. PR
-#106 can become merge-eligible only after the agent reports clean local proofs
-and receives an explicit steward authorization to merge.
+The Day One payload now points at the receipt-first deterministic workflow gate.
+The gate uses `blank.yml` as the temporary dispatch surface, while
+`release-docker.yaml` remains a future replacement once it is present and
+reviewed.

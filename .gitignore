@@ -6,4 +6,4 @@ run.sh
 # Output directories
 artifacts/
 ledger/
-
+receipts/

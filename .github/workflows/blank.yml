@@ -1,0 +1,59 @@
+name: Day One Deterministic Workflow Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      head_sha:
+        description: Active head SHA to prove.
+        required: true
+        type: string
+      sovereign_intent_proof:
+        description: Non-empty steward proof authorizing the Day One gate.
+        required: true
+        type: string
+
+jobs:
+  receipt-then-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout active head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head_sha }}
+
+      - name: Verify dispatch targets active head SHA
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ inputs.head_sha }}"
+
+      - name: Emit Day One receipt before gate
+        run: |
+          python scripts/day_one_gate.py emit \
+            --head-sha "${{ inputs.head_sha }}" \
+            --workflow-name blank.yml \
+            --sovereign-intent-proof "${{ inputs.sovereign_intent_proof }}" \
+            --receipt-path receipts/day-one-receipt.json
+
+      - name: Verify emitted receipt
+        run: |
+          python scripts/day_one_gate.py verify \
+            --head-sha "${{ inputs.head_sha }}" \
+            --workflow-name blank.yml \
+            --receipt-path receipts/day-one-receipt.json
+
+      - name: Upload Day One receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: day-one-receipt-${{ inputs.head_sha }}
+          path: receipts/day-one-receipt.json
+          if-no-files-found: error
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run deterministic manifesto gate
+        run: |
+          python -m pytest tests/test_manifesto.py

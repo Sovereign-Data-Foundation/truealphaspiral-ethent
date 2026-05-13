@@ -7,9 +7,6 @@ on:
         description: Deterministic image tag to build and prove
         required: false
         default: day-one
-  push:
-    tags:
-      - 'v*'
 
 jobs:
   release-docker:

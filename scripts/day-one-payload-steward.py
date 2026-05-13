@@ -59,7 +59,7 @@ def sha256_file_at_ref(ref: str, relative_path: str) -> str:
             capture_output=True,
         )
     except subprocess.CalledProcessError as error:
-        message = error.stderr.decode("utf-8", errors="replace").strip() or f"unable to read {spec}"
+        message = error.stderr.decode("utf-8", errors="replace").strip() or f"git show failed for {spec}"
         raise FileNotFoundError(message) from error
     return hashlib.sha256(result.stdout).hexdigest()
 

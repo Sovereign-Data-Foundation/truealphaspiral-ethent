@@ -40,6 +40,10 @@ def test_workflow_receipt_uses_hash_from_dispatched_ref(monkeypatch):
 
 def test_local_receipt_uses_local_workflow_hash(monkeypatch):
     workflow = steward.REPO_ROOT / steward.DEFAULT_WORKFLOW
-    monkeypatch.setattr(steward, "sha256_file_at_ref", lambda *_: (_ for _ in ()).throw(AssertionError("unexpected call")))
+
+    def fail_if_called(*_):
+        raise AssertionError("unexpected call")
+
+    monkeypatch.setattr(steward, "sha256_file_at_ref", fail_if_called)
     receipt = steward.build_receipt("test-intent", workflow, "local", "main")
     assert receipt.workflow_sha256 == steward.sha256_file(workflow)

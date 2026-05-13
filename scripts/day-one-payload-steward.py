@@ -52,14 +52,15 @@ def sha256_file(path: pathlib.Path) -> str:
 def sha256_file_at_ref(ref: str, relative_path: str) -> str:
     """Return the SHA-256 digest for *relative_path* at git *ref*."""
     spec = f"{ref}:{relative_path}"
-    result = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "show", spec],
-        check=False,
-        capture_output=True,
-    )
-    if result.returncode != 0:
-        message = result.stderr.decode("utf-8", errors="replace").strip() or f"unable to read {spec}"
-        raise FileNotFoundError(message)
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "show", spec],
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as error:
+        message = error.stderr.decode("utf-8", errors="replace").strip() or f"unable to read {spec}"
+        raise FileNotFoundError(message) from error
     return hashlib.sha256(result.stdout).hexdigest()
 
 

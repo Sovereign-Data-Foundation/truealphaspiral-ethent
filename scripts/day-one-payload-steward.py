@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import pathlib
+import subprocess
 import time
 from dataclasses import asdict, dataclass
 from typing import Sequence
@@ -48,6 +49,21 @@ def sha256_file(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_file_at_ref(ref: str, relative_path: str) -> str:
+    """Return the SHA-256 digest for *relative_path* at git *ref*."""
+    spec = f"{ref}:{relative_path}"
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "show", spec],
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as error:
+        message = error.stderr.decode("utf-8", errors="replace").strip() or f"git show failed for {spec}"
+        raise FileNotFoundError(message) from error
+    return hashlib.sha256(result.stdout).hexdigest()
+
+
 def build_workflow_command(workflow: str, ref: str) -> str:
     """Build the explicit GitHub Actions dispatch command."""
     return f"gh workflow run {pathlib.PurePosixPath(workflow).name} --ref {ref}"
@@ -62,11 +78,12 @@ def build_receipt(intent: str, workflow: pathlib.Path, mode: str, ref: str) -> D
     """Create a Day One receipt without executing the selected command."""
     relative_workflow = workflow.relative_to(REPO_ROOT).as_posix()
     command = build_workflow_command(relative_workflow, ref) if mode == "workflow" else build_local_command()
+    workflow_sha256 = sha256_file_at_ref(ref, relative_workflow) if mode == "workflow" else sha256_file(workflow)
     return DayOneReceipt(
         intent=intent,
         target=relative_workflow,
         command=command,
-        workflow_sha256=sha256_file(workflow),
+        workflow_sha256=workflow_sha256,
         steward_mode=mode,
         timestamp_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     )

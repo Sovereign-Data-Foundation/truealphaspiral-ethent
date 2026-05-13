@@ -279,11 +279,12 @@ class TestUVK:
 
     def test_admit_denied_wrong_right(self):
         uvk, ct, cap, _ = self._make_uvk()
-        # cap only has EXECUTE | MINT, not READ
+        # A READ-only capability never reaches the capability-table check;
+        # UVK refuses it at the perimeter because it lacks EXECUTE or MINT.
         cap_read_only = ct.retype("res2", Right.READ)
         result = uvk.admit(cap_read_only, Right.WRITE, action="write")
         assert not result.admitted
-        assert result.status == AdmissionStatus.DENIED_CAPABILITY
+        assert result.status == AdmissionStatus.DENIED_AUTHORIZATION
 
     def test_admit_denied_invariant_failure(self):
         chain = WakeChain()

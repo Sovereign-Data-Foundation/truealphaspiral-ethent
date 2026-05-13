@@ -1,0 +1,50 @@
+name: Deterministic Release Docker
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Deterministic image tag to build and prove
+        required: false
+        default: day-one
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release-docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set deterministic image tag
+        id: image
+        run: |
+          TAG="${{ github.event.inputs.image_tag || github.ref_name }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Sovereign Container 1776
+        run: |
+          docker build -t truealphaspiral/sovereign-container-1776:${{ steps.image.outputs.tag }} .
+
+      - name: Execute manifesto proof
+        run: |
+          docker run --rm truealphaspiral/sovereign-container-1776:${{ steps.image.outputs.tag }}
+
+      - name: Emit release provenance
+        run: |
+          docker image inspect truealphaspiral/sovereign-container-1776:${{ steps.image.outputs.tag }} \
+            --format '{{json .Id}}' | tee release-docker-image-id.json
+          sha256sum release-docker-image-id.json | tee release-docker-image-id.sha256
+
+      - name: Upload release provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-docker-provenance
+          path: |
+            release-docker-image-id.json
+            release-docker-image-id.sha256

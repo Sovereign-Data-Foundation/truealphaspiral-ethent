@@ -65,6 +65,27 @@ This prevents isolated, context-free assertions from entering the audit chain an
 helps preserve phase coherence across the TAS execution spiral, making it more
 resistant to hostile counter-spirals.
 
+
+## Day One steward directive
+
+The Day One payload is initiated by explicit steward dispatch, not by merging an
+unverified pull request. The local steering command is:
+
+```bash
+bash scripts/day_one_payload.sh --mode workflow --ref main
+```
+
+That command records the authenticated intent receipt and prints the deterministic
+GitHub Actions dispatch target:
+
+```bash
+gh workflow run release-docker.yml --ref main
+```
+
+Use `--dry-run` to verify the workflow hash and command without writing a
+receipt. Use `--mode local` to run the local Docker build-and-proof command
+before dispatching the release workflow.
+
 ## Repository invariants
 
 - No execution without an artifact.

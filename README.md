@@ -41,7 +41,7 @@ contextual witness. Every commit must pass this π-check before it joins the
 ledger, ensuring each spiral remains phase-coherent and resistant to hostile
 counter-spirals.
 
-## Deterministic Agency terminology
+## Deterministic Agency Terminology
 
 Use **Deterministic Agency** to describe the TAS authorization model in an
 increasingly algorithmic world. Avoid the phrase "deterministic algorithmic
@@ -50,5 +50,5 @@ granted after identity, consent, lineage, admissibility, witness, and receipt
 checks bind that path to proof.
 
 This distinction preserves the Diameter/Circumference boundary: probability can
-produce candidates on the algorithmic circumference, but only deterministic
-proof at the diameter can authorize action.
+produce candidates on the algorithmic Circumference, but only deterministic
+proof at the Diameter can authorize action.

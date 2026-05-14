@@ -86,6 +86,46 @@ Use `--dry-run` to verify the workflow hash and command without writing a
 receipt. Use `--mode local` to run the local Docker build-and-proof command
 before dispatching the release workflow.
 
+
+## Human API Key bridge
+
+The executable bridge is implemented in `human_api_bridge.py`. It models the
+operator key as a human intent fingerprint, then narrows that intent into a
+machine capability that can only approve explicitly scoped commands. Provider
+API secrets are never stored in the receipt; receipts contain hashes of the
+intent, scope, command, and wake-chain proof.
+
+The Day One bridge scope admits the deterministic release workflow command and
+refuses unscoped alternatives such as direct PR merges:
+
+```python
+from human_api_bridge import DEFAULT_RELEASE_COMMAND, build_day_one_bridge
+
+bridge = build_day_one_bridge("TAS Clean Stack")
+receipt = bridge.decide(DEFAULT_RELEASE_COMMAND)
+assert bridge.replay([receipt])
+```
+
+Operationally, this means the steward command remains:
+
+```bash
+bash scripts/day_one_payload.sh --mode workflow --ref main
+```
+
+and the receipt-bearing dispatch target remains:
+
+```bash
+gh workflow run release-docker.yml --ref main
+```
+
+Bridge invariants:
+
+- Human intent becomes bounded authority only through an explicit command scope.
+- In-scope commands emit replayable receipts before execution.
+- Out-of-scope commands emit refusal receipts instead of reaching a shell.
+- Replay verifies command hashes, scope hashes, intent hashes, and wake-chain
+  continuity.
+
 ## Repository invariants
 
 - No execution without an artifact.

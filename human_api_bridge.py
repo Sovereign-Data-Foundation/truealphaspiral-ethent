@@ -22,6 +22,7 @@ from wake_chain import ProvenanceMark, WakeChain
 
 DEFAULT_BRIDGE_INTENT = "tas-clean-stack-day-one-bridge"
 DEFAULT_RELEASE_COMMAND = "gh workflow run release-docker.yml --ref main"
+BRIDGE_NAME = "Human API Key"
 
 
 def _canonical_json(payload: object) -> str:
@@ -146,7 +147,7 @@ class HumanApiBridge:
     def _commit(self, decision: BridgeDecision, command: str, reason: str) -> BridgeReceipt:
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         event = {
-            "bridge": "Human API Key",
+            "bridge": BRIDGE_NAME,
             "decision": decision.value,
             "command_hash": _sha256_text(command),
             "intent_hash": self.authority.intent_hash,
@@ -194,7 +195,7 @@ class HumanApiBridge:
             expected_event_hash = _sha256_text(
                 _canonical_json(
                     {
-                        "bridge": "Human API Key",
+                        "bridge": BRIDGE_NAME,
                         "decision": receipt.decision.value,
                         "command_hash": receipt.command_hash,
                         "intent_hash": receipt.intent_hash,

@@ -1,3 +1,5 @@
+import hashlib
+
 from human_api_bridge import (
     DEFAULT_RELEASE_COMMAND,
     BridgeDecision,
@@ -6,6 +8,10 @@ from human_api_bridge import (
     HumanIntent,
     build_day_one_bridge,
 )
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def test_day_one_bridge_admits_release_workflow_command():
@@ -52,6 +58,43 @@ def test_replay_rejects_tampered_command():
         command_hash=receipt.command_hash,
         reason=receipt.reason,
         wake_seq=receipt.wake_seq,
+        wake_receipt_hash=receipt.wake_receipt_hash,
+        timestamp_utc=receipt.timestamp_utc,
+    )
+
+    assert not bridge.replay([tampered])
+
+
+def test_replay_rejects_recomputed_command_hash_bound_to_old_wake_event():
+    bridge = build_day_one_bridge("TAS Clean Stack")
+    receipt = bridge.decide(DEFAULT_RELEASE_COMMAND)
+    unauthorized = "gh workflow run release-docker.yml --ref dev"
+    forged = type(receipt)(
+        decision=receipt.decision,
+        command=unauthorized,
+        intent_hash=receipt.intent_hash,
+        scope_hash=receipt.scope_hash,
+        command_hash=_sha256_text(unauthorized),
+        reason=receipt.reason,
+        wake_seq=receipt.wake_seq,
+        wake_receipt_hash=receipt.wake_receipt_hash,
+        timestamp_utc=receipt.timestamp_utc,
+    )
+
+    assert not bridge.replay([forged])
+
+
+def test_replay_rejects_negative_wake_sequence():
+    bridge = build_day_one_bridge("TAS Clean Stack")
+    receipt = bridge.decide(DEFAULT_RELEASE_COMMAND)
+    tampered = type(receipt)(
+        decision=receipt.decision,
+        command=receipt.command,
+        intent_hash=receipt.intent_hash,
+        scope_hash=receipt.scope_hash,
+        command_hash=receipt.command_hash,
+        reason=receipt.reason,
+        wake_seq=-1,
         wake_receipt_hash=receipt.wake_receipt_hash,
         timestamp_utc=receipt.timestamp_utc,
     )

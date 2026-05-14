@@ -186,9 +186,9 @@ class HumanApiBridge:
                 return False
             if receipt.scope_hash != self.authority.scope_hash():
                 return False
-            if not (0 <= receipt.wake_seq < len(wake_receipts)):
-                return False
             if receipt.command_hash != _sha256_text(receipt.command):
+                return False
+            if not (0 <= receipt.wake_seq < len(wake_receipts)):
                 return False
             expected_event_hash = _sha256_text(
                 _canonical_json(

@@ -22,6 +22,7 @@ from wake_chain import ProvenanceMark, WakeChain
 
 DEFAULT_BRIDGE_INTENT = "tas-clean-stack-day-one-bridge"
 DEFAULT_RELEASE_COMMAND = "gh workflow run release-docker.yml --ref main"
+BRIDGE_NAME = "Human API Key"
 
 
 def _canonical_json(payload: object) -> str:
@@ -146,7 +147,7 @@ class HumanApiBridge:
     def _commit(self, decision: BridgeDecision, command: str, reason: str) -> BridgeReceipt:
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         event = {
-            "bridge": "Human API Key",
+            "bridge": BRIDGE_NAME,
             "decision": decision.value,
             "command_hash": _sha256_text(command),
             "intent_hash": self.authority.intent_hash,
@@ -187,7 +188,20 @@ class HumanApiBridge:
                 return False
             if receipt.command_hash != _sha256_text(receipt.command):
                 return False
-            if receipt.wake_seq >= len(wake_receipts):
+            if not (0 <= receipt.wake_seq < len(wake_receipts)):
+                return False
+            expected_event_hash = _sha256_text(
+                _canonical_json(
+                    {
+                        "bridge": BRIDGE_NAME,
+                        "decision": receipt.decision.value,
+                        "command_hash": receipt.command_hash,
+                        "intent_hash": receipt.intent_hash,
+                        "scope_hash": receipt.scope_hash,
+                    }
+                )
+            )
+            if wake_receipts[receipt.wake_seq].event_hash.hex() != expected_event_hash:
                 return False
             if wake_receipts[receipt.wake_seq].receipt_hash().hex() != receipt.wake_receipt_hash:
                 return False

@@ -16,7 +16,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Iterable, Mapping, Sequence
 
-from capability import Capability, CapabilityTable, Right
+from capability import Capability, CapabilityError, CapabilityTable, Right
 from wake_chain import ProvenanceMark, WakeChain
 
 
@@ -138,7 +138,7 @@ class HumanApiBridge:
 
         try:
             self.capability_table.invoke(self.capability, Right.EXECUTE, msg=command)
-        except Exception as exc:  # capability errors become boundary proofs
+        except CapabilityError as exc:  # capability errors become boundary proofs
             return self._commit(BridgeDecision.REFUSAL, command, f"capability rejected command: {exc}")
 
         return self._commit(BridgeDecision.RECEIPT, command, "command admitted by human-scoped bridge")
@@ -187,18 +187,28 @@ class HumanApiBridge:
                 return False
             if receipt.command_hash != _sha256_text(receipt.command):
                 return False
-            if receipt.wake_seq >= len(wake_receipts):
+            if receipt.wake_seq < 0 or receipt.wake_seq >= len(wake_receipts):
+                return False
+            expected_event = {
+                "bridge": "Human API Key",
+                "decision": receipt.decision.value,
+                "command_hash": receipt.command_hash,
+                "intent_hash": receipt.intent_hash,
+                "scope_hash": receipt.scope_hash,
+            }
+            expected_event_hash = _sha256_text(_canonical_json(expected_event))
+            if wake_receipts[receipt.wake_seq].event_hash.hex() != expected_event_hash:
                 return False
             if wake_receipts[receipt.wake_seq].receipt_hash().hex() != receipt.wake_receipt_hash:
                 return False
         return True
 
 
-def build_day_one_bridge(steward_label: str = "HumanAPI Key 001") -> HumanApiBridge:
+def build_day_one_bridge(steward_label: str = "HumanAPI Key 001", issued_at_utc: str | None = None) -> HumanApiBridge:
     """Construct the Day One bridge for the deterministic release workflow."""
     intent = HumanIntent(
         steward_label=steward_label,
-        issued_at_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        issued_at_utc=issued_at_utc or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     )
     authority = DelegatedAuthority.from_intent(intent, [DEFAULT_RELEASE_COMMAND])
     return HumanApiBridge(authority)

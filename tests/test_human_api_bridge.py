@@ -100,3 +100,12 @@ def test_replay_rejects_negative_wake_sequence():
     )
 
     assert not bridge.replay([tampered])
+
+
+def test_build_day_one_bridge_is_deterministic_with_fixed_timestamp():
+    ts = "2026-05-14T00:00:00Z"
+    bridge_a = build_day_one_bridge("TAS Clean Stack", issued_at_utc=ts)
+    bridge_b = build_day_one_bridge("TAS Clean Stack", issued_at_utc=ts)
+
+    assert bridge_a.authority.intent_hash == bridge_b.authority.intent_hash
+    assert bridge_a.authority.scope_hash() == bridge_b.authority.scope_hash()

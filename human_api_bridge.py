@@ -186,9 +186,7 @@ class HumanApiBridge:
                 return False
             if receipt.scope_hash != self.authority.scope_hash():
                 return False
-            if receipt.wake_seq < 0:
-                return False
-            if receipt.wake_seq >= len(wake_receipts):
+            if not (0 <= receipt.wake_seq < len(wake_receipts)):
                 return False
             if receipt.command_hash != _sha256_text(receipt.command):
                 return False

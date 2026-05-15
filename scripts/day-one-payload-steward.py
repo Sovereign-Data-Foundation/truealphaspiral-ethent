@@ -103,7 +103,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if not args.dry_run:
         receipt_path = write_receipt(receipt, REPO_ROOT / args.receipt_dir)
-        output["receipt_path"] = receipt_path.relative_to(REPO_ROOT).as_posix()
+        output["receipt_path"] = receipt_path.relative_to(REPO_ROOT).as_posix() if receipt_path.is_relative_to(REPO_ROOT) else receipt_path.as_posix()
 
     print(json.dumps(output, indent=2, sort_keys=True))
     print(f"DAY_ONE_COMMAND={receipt.command}")

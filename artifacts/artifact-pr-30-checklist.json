@@ -1,0 +1,27 @@
+{
+  "checklist": {
+    "artifact_guard_hashes": "committed_in_repository",
+    "breaking_changes": "none_identified",
+    "docs": "not_applicable_security_fix_no_api_docs_required",
+    "house_style": "passed",
+    "itl_lineage": {
+      "child_hash": "64205c0cb4ca1cd8c6bcaa9eefe9f62f6372b5fe",
+      "parent_hash": "fc99db7e72aae673f53e5578085357d703652cc9"
+    },
+    "pi_staple_perspective_check": "post_merge_artifact_json_emitted",
+    "security_privacy": "reviewed",
+    "unit_integration_tests": "added_or_updated"
+  },
+  "head_sha": "64796705eb267e316704f1bbba0facc76a77099d",
+  "merge_commit_sha": "64205c0cb4ca1cd8c6bcaa9eefe9f62f6372b5fe",
+  "notes": [
+    "PR #30 was already closed and merged before this artifact was committed.",
+    "This artifact records the post-merge checklist completion evidence and ITL lineage pointer."
+  ],
+  "parent_hash": "fc99db7e72aae673f53e5578085357d703652cc9",
+  "pull_request": 30,
+  "repository": "Sovereign-Data-Foundation/truealphaspiral-ethent",
+  "schema": "tas.pr_checklist_artifact.v1",
+  "status": "merged",
+  "title": "Fix replay security vulnerabilities and address PR #24 review feedback"
+}

@@ -60,7 +60,7 @@ def build_local_command() -> str:
 
 def build_receipt(intent: str, workflow: pathlib.Path, mode: str, ref: str) -> DayOneReceipt:
     """Create a Day One receipt without executing the selected command."""
-    relative_workflow = workflow.relative_to(REPO_ROOT).as_posix()
+    relative_workflow = workflow.relative_to(REPO_ROOT).as_posix() if workflow.is_relative_to(REPO_ROOT) else workflow.as_posix()
     command = build_workflow_command(relative_workflow, ref) if mode == "workflow" else build_local_command()
     return DayOneReceipt(
         intent=intent,

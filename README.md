@@ -38,8 +38,8 @@ artifacts under `artifacts/` and recording their hashes in
 
 The stewarding command for a Day One release handoff is captured in
 [`docs/day-one-payload.md`](docs/day-one-payload.md). It directs an agent to
-emit a Day One receipt first, then dispatch the deterministic workflow gate
-against the active head SHA using `.github/workflows/blank.yml` until
+emit a Day One receipt first, then run or dispatch the deterministic workflow
+gate against the active head SHA using `.github/workflows/blank.yml` until
 `release-docker.yaml` is available.
 
 ## Staple-\u03c0 Perspective Intelligence Clause

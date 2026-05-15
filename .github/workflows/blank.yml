@@ -1,6 +1,8 @@
 name: Day One Deterministic Workflow Gate
 
 on:
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       head_sha:
@@ -17,35 +19,38 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      DAY_ONE_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.inputs.head_sha }}
+      DAY_ONE_INTENT_PROOF: ${{ github.event_name == 'pull_request' && github.sha || github.event.inputs.sovereign_intent_proof }}
     steps:
       - name: Checkout active head
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.head_sha }}
+          ref: ${{ env.DAY_ONE_HEAD_SHA }}
 
       - name: Verify dispatch targets active head SHA
         run: |
-          test "$(git rev-parse HEAD)" = "${{ inputs.head_sha }}"
+          test "$(git rev-parse HEAD)" = "$DAY_ONE_HEAD_SHA"
 
       - name: Emit Day One receipt before gate
         run: |
           python scripts/day_one_gate.py emit \
-            --head-sha "${{ inputs.head_sha }}" \
+            --head-sha "$DAY_ONE_HEAD_SHA" \
             --workflow-name blank.yml \
-            --sovereign-intent-proof "${{ inputs.sovereign_intent_proof }}" \
+            --sovereign-intent-proof "$DAY_ONE_INTENT_PROOF" \
             --receipt-path receipts/day-one-receipt.json
 
       - name: Verify emitted receipt
         run: |
           python scripts/day_one_gate.py verify \
-            --head-sha "${{ inputs.head_sha }}" \
+            --head-sha "$DAY_ONE_HEAD_SHA" \
             --workflow-name blank.yml \
             --receipt-path receipts/day-one-receipt.json
 
       - name: Upload Day One receipt
         uses: actions/upload-artifact@v4
         with:
-          name: day-one-receipt-${{ inputs.head_sha }}
+          name: day-one-receipt-${{ env.DAY_ONE_HEAD_SHA }}
           path: receipts/day-one-receipt.json
           if-no-files-found: error
 
@@ -54,6 +59,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Run deterministic manifesto gate
+      - name: Run deterministic test gate
         run: |
-          python -m pytest tests/test_manifesto.py
+          python -m pytest

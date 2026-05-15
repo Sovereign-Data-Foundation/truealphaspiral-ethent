@@ -11,7 +11,8 @@ workflow gate against the current head SHA.
   `.github/workflows/sovereign-container.yml`, which builds the Docker image and
   runs the container self-test on pushes and pull requests targeting `main`.
 - The temporary Day One dispatch target is `.github/workflows/blank.yml` until
-  `.github/workflows/release-docker.yaml` is available.
+  `.github/workflows/release-docker.yaml` is available. It runs automatically on
+  pull requests and can also be dispatched manually.
 - The receipt emitter is `scripts/day_one_gate.py`; it emits a Wake/UVK-backed
   receipt before the workflow gate proceeds.
 
@@ -49,8 +50,9 @@ python scripts/day_one_gate.py verify \
   --head-sha "$ACTIVE_HEAD_SHA" \
   --workflow-name blank.yml \
   --receipt-path receipts/day-one-receipt.json
+ACTIVE_REF="$(git branch --show-current)"
 gh workflow run blank.yml \
-  --ref "$ACTIVE_HEAD_SHA" \
+  --ref "$ACTIVE_REF" \
   -f head_sha="$ACTIVE_HEAD_SHA" \
   -f sovereign_intent_proof="PR #158 merged Day One directive"
 ```
@@ -60,4 +62,5 @@ gh workflow run blank.yml \
 The Day One payload now points at the receipt-first deterministic workflow gate.
 The gate uses `blank.yml` as the temporary dispatch surface, while
 `release-docker.yaml` remains a future replacement once it is present and
-reviewed.
+reviewed. Pull requests run the same receipt-first gate automatically with the
+PR head SHA as the active proof target.

@@ -126,6 +126,40 @@ Bridge invariants:
 - Replay verifies command hashes, scope hashes, intent hashes, and wake-chain
   continuity.
 
+## Replay security hardening — PR #30
+
+PR #30, `Fix replay security vulnerabilities and address PR #24 review feedback`,
+strengthened the Human API Bridge replay path and converted prior review feedback
+into concrete security corrections.
+
+Replay validation now binds receipts back to the provenance event they claim to
+represent. The bridge reconstructs the expected event from receipt fields and
+rejects replay when the recorded wake event hash does not match that canonical
+expected event. This prevents forged command or command-hash substitution while
+reusing an otherwise valid wake receipt hash.
+
+The replay path also rejects negative `wake_seq` values before indexing wake
+receipts. This closes the Python negative-index bypass class and keeps wake-chain
+continuity explicit rather than accidental.
+
+Decision handling was narrowed so implementation defects are not silently
+swallowed as refusal receipts. Refusal remains a first-class governed artifact,
+but defects must remain visible as defects. `build_day_one_bridge()` also accepts
+an optional fixed `issued_at_utc` value so audit sessions can deterministically
+reproduce bridge intent and scope hashes.
+
+PR #30 test coverage includes forged command-hash replay rejection, negative
+wake-sequence rejection, and deterministic Day One bridge construction.
+
+Traceability:
+
+- PR head SHA: `64796705eb267e316704f1bbba0facc76a77099d`
+- Merge commit / child hash: `64205c0cb4ca1cd8c6bcaa9eefe9f62f6372b5fe`
+- Parent hash: `fc99db7e72aae673f53e5578085357d703652cc9`
+- Checklist artifact: `artifacts/artifact-pr-30-checklist.json`
+- Checklist artifact commit: `5c29a410590c9a1ea4122aa8b4889ff16a5e105f`
+- Press release: `releases/2026-05-15-press-release.md`
+
 ## Repository invariants
 
 - No execution without an artifact.

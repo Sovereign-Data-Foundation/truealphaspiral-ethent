@@ -1,6 +1,6 @@
 """Sovereign Equation: A_C > S_C (§III of the Spiral Manifesto).
 
-The primary invariant at the centre of the spiral::
+The primary invariant at the center of the spiral::
 
     A_C > S_C
 

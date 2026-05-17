@@ -55,7 +55,7 @@ class Capability:
 
     Capabilities are immutable once created.  Tokens are identified by a UUID
     and carry a short HMAC tag so that the UVK can verify they were issued by
-    the authorised kernel.
+    the authorized kernel.
 
     Parameters
     ----------

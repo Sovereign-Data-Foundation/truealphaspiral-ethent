@@ -40,7 +40,9 @@ The stewarding command for a Day One release handoff is captured in
 [`docs/day-one-payload.md`](docs/day-one-payload.md). It directs an agent to
 emit a Day One receipt first, then run or dispatch the deterministic workflow
 gate against the active head SHA using `.github/workflows/blank.yml` until
-`release-docker.yaml` is available.
+`release-docker.yaml` is available. The receipt records five path-sensitive
+admissibility gates: novelty, acquisition trace, bounded efficiency, interface
+provenance, and constructive refusal.
 
 ## Staple-\u03c0 Perspective Intelligence Clause
 

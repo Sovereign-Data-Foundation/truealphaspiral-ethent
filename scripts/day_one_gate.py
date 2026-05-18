@@ -3,8 +3,8 @@
 
 The Day One directive is intentionally fail-closed: the receipt must be emitted
 before a workflow gate can proceed, and verification rejects any missing receipt,
-failed invariant, workflow mismatch, head-SHA mismatch, or missing
-sovereign-intent proof.
+failed invariant, workflow mismatch, head-SHA mismatch, missing sovereign-intent
+proof, or missing path-sensitive acquisition proof.
 """
 # © 2025 Russell Nordland | TrueAlphaSpiral (TAS) | Apache-2.0
 
@@ -23,6 +23,20 @@ RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release-docker.yaml"
 FALLBACK_WORKFLOW_NAME = "blank.yml"
 FALLBACK_WORKFLOW = ROOT / ".github" / "workflows" / FALLBACK_WORKFLOW_NAME
 DEFAULT_RECEIPT = ROOT / "receipts" / "day-one-receipt.json"
+DEFAULT_NOVELTY_ASSERTION = "day-one-active-head-treated-as-new"
+DEFAULT_ACQUISITION_TRACE = (
+    "resolve-head -> emit-receipt -> verify-receipt -> deterministic-test-gate"
+)
+DEFAULT_SEARCH_STEPS = 4
+DEFAULT_MAX_SEARCH_STEPS = 16
+DEFAULT_INTERFACE_PROVENANCE = "github-actions-workflow-dispatch-or-pull-request-checkout"
+PATH_SENSITIVE_GATE_NAMES = (
+    "novelty_gate",
+    "acquisition_trace_gate",
+    "efficiency_gate",
+    "interface_exploit_gate",
+    "refusal_gate",
+)
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -53,6 +67,34 @@ def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def proof_present(inputs: Dict[str, Any], field: str) -> bool:
+    """Return true when a named proof field is non-empty."""
+    return bool(str(inputs.get(field, "")).strip())
+
+
+def bounded_search_values(inputs: Dict[str, Any]) -> tuple[Optional[int], Optional[int]]:
+    """Return parsed bounded-search values, or ``None`` for invalid values."""
+    try:
+        search_steps = int(inputs.get("search_steps", -1))
+        max_search_steps = int(inputs.get("max_search_steps", -1))
+    except (TypeError, ValueError):
+        return None, None
+    return search_steps, max_search_steps
+
+
+def bounded_search(inputs: Dict[str, Any]) -> bool:
+    """Return true iff the declared search stayed within deterministic bounds."""
+    search_steps, max_search_steps = bounded_search_values(inputs)
+    if search_steps is None or max_search_steps is None:
+        return False
+    return 0 <= search_steps <= max_search_steps
+
+
+def no_refusal_basis(inputs: Dict[str, Any]) -> bool:
+    """Return true when execution is not carrying a constructive refusal basis."""
+    return not str(inputs.get("refusal_basis", "")).strip()
+
+
 def resolve_workflow(workflow_name: str) -> Path:
     """Resolve a workflow name relative to ``.github/workflows``."""
     workflow_path = ROOT / ".github" / "workflows" / workflow_name
@@ -76,6 +118,46 @@ def workflow_is_admissible(workflow_name: str) -> bool:
     )
 
 
+def path_sensitive_gate_report(inputs: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Build the five path-sensitive admissibility gate receipts."""
+    novelty_assertion = str(inputs.get("novelty_assertion", ""))
+    acquisition_trace = str(inputs.get("acquisition_trace", ""))
+    interface_provenance = str(inputs.get("interface_provenance", ""))
+    refusal_basis = str(inputs.get("refusal_basis", ""))
+    search_steps, max_search_steps = bounded_search_values(inputs)
+    return {
+        "novelty_gate": {
+            "passed": proof_present(inputs, "novelty_assertion"),
+            "proof_sha256": sha256_text(novelty_assertion)
+            if novelty_assertion.strip()
+            else "",
+        },
+        "acquisition_trace_gate": {
+            "passed": proof_present(inputs, "acquisition_trace"),
+            "trace_sha256": sha256_text(acquisition_trace)
+            if acquisition_trace.strip()
+            else "",
+        },
+        "efficiency_gate": {
+            "passed": bounded_search(inputs),
+            "search_steps": search_steps,
+            "max_search_steps": max_search_steps,
+        },
+        "interface_exploit_gate": {
+            "passed": proof_present(inputs, "interface_provenance"),
+            "provenance_sha256": sha256_text(interface_provenance)
+            if interface_provenance.strip()
+            else "",
+        },
+        "refusal_gate": {
+            "passed": no_refusal_basis(inputs),
+            "refusal_basis_sha256": sha256_text(refusal_basis)
+            if refusal_basis.strip()
+            else "",
+        },
+    }
+
+
 def build_invariants() -> list[Invariant]:
     """Build fail-closed invariants for the Day One receipt emission."""
     return [
@@ -88,8 +170,8 @@ def build_invariants() -> list[Invariant]:
         Invariant(
             name="sovereign_intent_proof_present",
             version="1.0.0",
-            check=lambda _state, _action, inputs: bool(
-                str(inputs.get("sovereign_intent_proof", "")).strip()
+            check=lambda _state, _action, inputs: proof_present(
+                inputs, "sovereign_intent_proof"
             ),
         ),
         Invariant(
@@ -98,6 +180,37 @@ def build_invariants() -> list[Invariant]:
             check=lambda _state, _action, inputs: workflow_is_admissible(
                 str(inputs.get("workflow_name", ""))
             ),
+        ),
+        Invariant(
+            name="novelty_gate",
+            version="1.0.0",
+            check=lambda _state, _action, inputs: proof_present(
+                inputs, "novelty_assertion"
+            ),
+        ),
+        Invariant(
+            name="acquisition_trace_gate",
+            version="1.0.0",
+            check=lambda _state, _action, inputs: proof_present(
+                inputs, "acquisition_trace"
+            ),
+        ),
+        Invariant(
+            name="efficiency_gate",
+            version="1.0.0",
+            check=lambda _state, _action, inputs: bounded_search(inputs),
+        ),
+        Invariant(
+            name="interface_exploit_gate",
+            version="1.0.0",
+            check=lambda _state, _action, inputs: proof_present(
+                inputs, "interface_provenance"
+            ),
+        ),
+        Invariant(
+            name="refusal_gate",
+            version="1.0.0",
+            check=lambda _state, _action, inputs: no_refusal_basis(inputs),
         ),
     ]
 
@@ -108,6 +221,12 @@ def emit_receipt(
     workflow_name: str,
     sovereign_intent_proof: str,
     receipt_path: Path = DEFAULT_RECEIPT,
+    novelty_assertion: str = DEFAULT_NOVELTY_ASSERTION,
+    acquisition_trace: str = DEFAULT_ACQUISITION_TRACE,
+    search_steps: int = DEFAULT_SEARCH_STEPS,
+    max_search_steps: int = DEFAULT_MAX_SEARCH_STEPS,
+    interface_provenance: str = DEFAULT_INTERFACE_PROVENANCE,
+    refusal_basis: str = "",
 ) -> Dict[str, Any]:
     """Emit and persist the Day One provenance receipt.
 
@@ -126,7 +245,14 @@ def emit_receipt(
         if workflow_path.is_relative_to(ROOT)
         else str(workflow_path),
         "sovereign_intent_proof": sovereign_intent_proof,
+        "novelty_assertion": novelty_assertion,
+        "acquisition_trace": acquisition_trace,
+        "search_steps": search_steps,
+        "max_search_steps": max_search_steps,
+        "interface_provenance": interface_provenance,
+        "refusal_basis": refusal_basis,
     }
+    gate_report = path_sensitive_gate_report(inputs)
 
     wake = WakeChain(session_id=f"day-one-{head_sha[:12]}")
     cap_table = CapabilityTable()
@@ -148,6 +274,7 @@ def emit_receipt(
             "directive": "PR-158-Day-One",
             "fallback_workflow": FALLBACK_WORKFLOW_NAME,
             "release_workflow_available": release_workflow_available(),
+            "path_sensitive_gates": gate_report,
         },
     )
 
@@ -166,6 +293,7 @@ def emit_receipt(
         "sovereign_intent_proof_sha256": sha256_text(sovereign_intent_proof)
         if sovereign_intent_proof.strip()
         else "",
+        "path_sensitive_gates": gate_report,
         "failed_invariants": result.failed_invariants,
         "wake_valid": wake.verify(),
         "wake_head": wake.head.hex(),
@@ -214,6 +342,11 @@ def verify_receipt(
     if not workflow_is_admissible(str(payload.get("workflow_name", ""))):
         failures.append("workflow gate unavailable")
 
+    gates = payload.get("path_sensitive_gates") or {}
+    for gate_name in PATH_SENSITIVE_GATE_NAMES:
+        if not gates.get(gate_name, {}).get("passed"):
+            failures.append(f"path-sensitive gate failed: {gate_name}")
+
     if failures:
         raise RuntimeError("; ".join(failures))
     return payload
@@ -225,6 +358,12 @@ def cmd_emit(args: argparse.Namespace) -> int:
         workflow_name=args.workflow_name,
         sovereign_intent_proof=args.sovereign_intent_proof,
         receipt_path=Path(args.receipt_path),
+        novelty_assertion=args.novelty_assertion,
+        acquisition_trace=args.acquisition_trace,
+        search_steps=args.search_steps,
+        max_search_steps=args.max_search_steps,
+        interface_provenance=args.interface_provenance,
+        refusal_basis=args.refusal_basis,
     )
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
@@ -265,6 +404,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--sovereign-intent-proof",
         required=True,
         help="non-empty proof binding the human directive",
+    )
+    emit.add_argument(
+        "--novelty-assertion",
+        default=DEFAULT_NOVELTY_ASSERTION,
+        help="non-empty anti-contamination assertion for the active head",
+    )
+    emit.add_argument(
+        "--acquisition-trace",
+        default=DEFAULT_ACQUISITION_TRACE,
+        help="non-empty derivation trace for the admitted workflow action",
+    )
+    emit.add_argument(
+        "--search-steps",
+        type=int,
+        default=DEFAULT_SEARCH_STEPS,
+        help="declared bounded-search step count",
+    )
+    emit.add_argument(
+        "--max-search-steps",
+        type=int,
+        default=DEFAULT_MAX_SEARCH_STEPS,
+        help="maximum admissible bounded-search step count",
+    )
+    emit.add_argument(
+        "--interface-provenance",
+        default=DEFAULT_INTERFACE_PROVENANCE,
+        help="non-empty interface provenance proof for the workflow path",
+    )
+    emit.add_argument(
+        "--refusal-basis",
+        default="",
+        help="non-empty value records constructive refusal and denies execution",
     )
     emit.add_argument(
         "--receipt-path",

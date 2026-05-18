@@ -14,7 +14,9 @@ workflow gate against the current head SHA.
   `.github/workflows/release-docker.yaml` is available. It runs automatically on
   pull requests and can also be dispatched manually.
 - The receipt emitter is `scripts/day_one_gate.py`; it emits a Wake/UVK-backed
-  receipt before the workflow gate proceeds.
+  receipt before the workflow gate proceeds. That receipt now carries the five
+  path-sensitive admissibility gates: novelty, acquisition trace, bounded
+  efficiency, interface provenance, and constructive refusal.
 
 ## Fail-closed invariants
 
@@ -24,15 +26,20 @@ The Day One gate must stop on any of the following conditions:
 2. failed receipt invariant;
 3. failed workflow step;
 4. missing sovereign-intent proof;
-5. requested head SHA that differs from the active checked-out head; or
-6. a request for `release-docker.yaml` before that workflow exists.
+5. requested head SHA that differs from the active checked-out head;
+6. a request for `release-docker.yaml` before that workflow exists;
+7. missing novelty assertion;
+8. missing acquisition trace;
+9. declared search steps outside the bounded efficiency limit;
+10. missing interface provenance; or
+11. a constructive refusal basis that says execution is inadmissible.
 
 ## Exact Day One steering command
 
 Paste this into the active agent session:
 
 ```text
-Day One payload: proceed under PR #158's merged directive. Treat PR #106 as historical substrate only. Resolve the active head SHA with `git rev-parse HEAD`. Emit the Day One receipt first with `python scripts/day_one_gate.py emit --head-sha <ACTIVE_HEAD_SHA> --workflow-name blank.yml --sovereign-intent-proof "PR #158 merged Day One directive" --receipt-path receipts/day-one-receipt.json`, then verify it with `python scripts/day_one_gate.py verify --head-sha <ACTIVE_HEAD_SHA> --workflow-name blank.yml --receipt-path receipts/day-one-receipt.json`. Only after that receipt verifies, dispatch `blank.yml` against the same active head SHA with the same sovereign-intent proof. Fail closed on any missing receipt, failed invariant, failed workflow, or missing sovereign-intent proof. Do not use `release-docker.yaml` until it exists in `.github/workflows/`.
+Day One payload: proceed under PR #158's merged directive. Treat PR #106 as historical substrate only. Resolve the active head SHA with `git rev-parse HEAD`. Emit the Day One receipt first with `python scripts/day_one_gate.py emit --head-sha <ACTIVE_HEAD_SHA> --workflow-name blank.yml --sovereign-intent-proof "PR #158 merged Day One directive" --receipt-path receipts/day-one-receipt.json`, then verify it with `python scripts/day_one_gate.py verify --head-sha <ACTIVE_HEAD_SHA> --workflow-name blank.yml --receipt-path receipts/day-one-receipt.json`. Only after that receipt verifies, dispatch `blank.yml` against the same active head SHA with the same sovereign-intent proof. Fail closed on any missing receipt, failed invariant, failed workflow, missing sovereign-intent proof, or failed path-sensitive gate. Do not use `release-docker.yaml` until it exists in `.github/workflows/`.
 ```
 
 ## GitHub dispatch form

@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from scripts.day_one_gate import emit_receipt, verify_receipt, active_head_sha
+from scripts.day_one_gate import (
+    PATH_SENSITIVE_GATE_NAMES,
+    active_head_sha,
+    emit_receipt,
+    verify_receipt,
+)
 
 
 def test_day_one_receipt_emits_before_gate(tmp_path: Path):
@@ -23,6 +28,11 @@ def test_day_one_receipt_emits_before_gate(tmp_path: Path):
     assert payload["workflow_name"] == "blank.yml"
     assert payload["requested_head_sha"] == head_sha
     assert payload["sovereign_intent_proof_sha256"]
+    assert set(PATH_SENSITIVE_GATE_NAMES).issubset(payload["path_sensitive_gates"])
+    assert all(
+        payload["path_sensitive_gates"][gate_name]["passed"]
+        for gate_name in PATH_SENSITIVE_GATE_NAMES
+    )
     assert receipt_path.exists()
 
 
@@ -34,6 +44,62 @@ def test_day_one_receipt_fails_closed_without_intent(tmp_path: Path):
             head_sha=active_head_sha(),
             workflow_name="blank.yml",
             sovereign_intent_proof=" ",
+            receipt_path=receipt_path,
+        )
+
+    assert not receipt_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("override", "failed_gate"),
+    [
+        ({"novelty_assertion": " "}, "novelty_gate"),
+        ({"acquisition_trace": " "}, "acquisition_trace_gate"),
+        ({"interface_provenance": " "}, "interface_exploit_gate"),
+    ],
+)
+def test_day_one_receipt_fails_closed_without_path_proof(
+    tmp_path: Path, override: dict[str, str], failed_gate: str
+):
+    receipt_path = tmp_path / "receipt.json"
+
+    with pytest.raises(RuntimeError, match=failed_gate):
+        emit_receipt(
+            head_sha=active_head_sha(),
+            workflow_name="blank.yml",
+            sovereign_intent_proof="PR #158 merged Day One directive",
+            receipt_path=receipt_path,
+            **override,
+        )
+
+    assert not receipt_path.exists()
+
+
+def test_day_one_receipt_fails_closed_on_unbounded_search(tmp_path: Path):
+    receipt_path = tmp_path / "receipt.json"
+
+    with pytest.raises(RuntimeError, match="efficiency_gate"):
+        emit_receipt(
+            head_sha=active_head_sha(),
+            workflow_name="blank.yml",
+            sovereign_intent_proof="PR #158 merged Day One directive",
+            search_steps=17,
+            max_search_steps=16,
+            receipt_path=receipt_path,
+        )
+
+    assert not receipt_path.exists()
+
+
+def test_day_one_receipt_fails_closed_on_refusal_basis(tmp_path: Path):
+    receipt_path = tmp_path / "receipt.json"
+
+    with pytest.raises(RuntimeError, match="refusal_gate"):
+        emit_receipt(
+            head_sha=active_head_sha(),
+            workflow_name="blank.yml",
+            sovereign_intent_proof="PR #158 merged Day One directive",
+            refusal_basis="missing acquisition proof",
             receipt_path=receipt_path,
         )
 

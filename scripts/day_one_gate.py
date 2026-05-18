@@ -37,6 +37,22 @@ PATH_SENSITIVE_GATE_NAMES = (
     "interface_exploit_gate",
     "refusal_gate",
 )
+DEFAULT_MAXIM_PROOFS = {
+    "ignorance_no_excuse": "operator acknowledges law and policy are not optional",
+    "agreements_kept": "Day One action preserves stated steward agreement",
+    "clean_hands": "receipt records provenance before seeking workflow relief",
+    "do_equity": "gate applies the same proof burden to every execution path",
+    "wrong_has_remedy": "failures are surfaced as explicit denial receipts",
+    "ought_done": "promised receipt is emitted before workflow execution",
+    "no_laches": "known missing proofs fail immediately",
+    "truth_sovereign": "receipt hashes bind claims to verifiable artifacts",
+    "unrebutted_claims": "unanswered gate failures remain denial facts",
+    "workman_worthy_hire": "human steward intent is attributed and preserved",
+    "mens_rea_recklessness": "known unbounded or opaque execution is refused",
+    "no_self_accusation": "receipt stores proof hashes instead of raw sensitive proof",
+    "wrongful_possession": "unconsented or unproven inputs are inadmissible",
+}
+MAXIMS_OF_LAW_GATE_NAMES = tuple(DEFAULT_MAXIM_PROOFS)
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -70,6 +86,45 @@ def sha256_text(value: str) -> str:
 def proof_present(inputs: Dict[str, Any], field: str) -> bool:
     """Return true when a named proof field is non-empty."""
     return bool(str(inputs.get(field, "")).strip())
+
+
+def parse_maxim_proof_item(value: str) -> tuple[str, str]:
+    """Parse a ``NAME=PROOF`` CLI maxim override."""
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("maxim proof must be formatted as NAME=PROOF")
+    name, proof = value.split("=", 1)
+    if name not in DEFAULT_MAXIM_PROOFS:
+        known = ", ".join(MAXIMS_OF_LAW_GATE_NAMES)
+        raise argparse.ArgumentTypeError(f"unknown maxim proof {name!r}; known: {known}")
+    return name, proof
+
+
+def normalize_maxim_proofs(
+    overrides: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    """Return maxim proofs with deterministic defaults plus explicit overrides."""
+    proofs = dict(DEFAULT_MAXIM_PROOFS)
+    if overrides:
+        proofs.update(overrides)
+    return proofs
+
+
+def maxims_of_law_report(maxim_proofs: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
+    """Build hashed proof receipts for the maxims-of-law admissibility layer."""
+    report: Dict[str, Dict[str, Any]] = {}
+    for name in MAXIMS_OF_LAW_GATE_NAMES:
+        proof = str(maxim_proofs.get(name, ""))
+        report[name] = {
+            "passed": bool(proof.strip()),
+            "proof_sha256": sha256_text(proof) if proof.strip() else "",
+        }
+    return report
+
+
+def maxims_of_law_hold(inputs: Dict[str, Any]) -> bool:
+    """Return true iff every required maxim proof is present."""
+    report = maxims_of_law_report(inputs.get("maxim_proofs", {}))
+    return all(report[name]["passed"] for name in MAXIMS_OF_LAW_GATE_NAMES)
 
 
 def bounded_search_values(inputs: Dict[str, Any]) -> tuple[Optional[int], Optional[int]]:
@@ -212,6 +267,11 @@ def build_invariants() -> list[Invariant]:
             version="1.0.0",
             check=lambda _state, _action, inputs: no_refusal_basis(inputs),
         ),
+        Invariant(
+            name="maxims_of_law_gate",
+            version="1.0.0",
+            check=lambda _state, _action, inputs: maxims_of_law_hold(inputs),
+        ),
     ]
 
 
@@ -227,6 +287,7 @@ def emit_receipt(
     max_search_steps: int = DEFAULT_MAX_SEARCH_STEPS,
     interface_provenance: str = DEFAULT_INTERFACE_PROVENANCE,
     refusal_basis: str = "",
+    maxim_proofs: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Emit and persist the Day One provenance receipt.
 
@@ -251,8 +312,10 @@ def emit_receipt(
         "max_search_steps": max_search_steps,
         "interface_provenance": interface_provenance,
         "refusal_basis": refusal_basis,
+        "maxim_proofs": normalize_maxim_proofs(maxim_proofs),
     }
     gate_report = path_sensitive_gate_report(inputs)
+    maxim_report = maxims_of_law_report(inputs["maxim_proofs"])
 
     wake = WakeChain(session_id=f"day-one-{head_sha[:12]}")
     cap_table = CapabilityTable()
@@ -275,6 +338,7 @@ def emit_receipt(
             "fallback_workflow": FALLBACK_WORKFLOW_NAME,
             "release_workflow_available": release_workflow_available(),
             "path_sensitive_gates": gate_report,
+            "maxims_of_law": maxim_report,
         },
     )
 
@@ -294,6 +358,7 @@ def emit_receipt(
         if sovereign_intent_proof.strip()
         else "",
         "path_sensitive_gates": gate_report,
+        "maxims_of_law": maxim_report,
         "failed_invariants": result.failed_invariants,
         "wake_valid": wake.verify(),
         "wake_head": wake.head.hex(),
@@ -347,6 +412,11 @@ def verify_receipt(
         if not gates.get(gate_name, {}).get("passed"):
             failures.append(f"path-sensitive gate failed: {gate_name}")
 
+    maxims = payload.get("maxims_of_law") or {}
+    for maxim_name in MAXIMS_OF_LAW_GATE_NAMES:
+        if not maxims.get(maxim_name, {}).get("passed"):
+            failures.append(f"maxim proof failed: {maxim_name}")
+
     if failures:
         raise RuntimeError("; ".join(failures))
     return payload
@@ -364,6 +434,7 @@ def cmd_emit(args: argparse.Namespace) -> int:
         max_search_steps=args.max_search_steps,
         interface_provenance=args.interface_provenance,
         refusal_basis=args.refusal_basis,
+        maxim_proofs=dict(args.maxim_proof or []),
     )
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
@@ -436,6 +507,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--refusal-basis",
         default="",
         help="non-empty value records constructive refusal and denies execution",
+    )
+    emit.add_argument(
+        "--maxim-proof",
+        action="append",
+        default=[],
+        metavar="NAME=PROOF",
+        type=parse_maxim_proof_item,
+        help="override a maxims-of-law proof; may be supplied multiple times",
     )
     emit.add_argument(
         "--receipt-path",

@@ -42,7 +42,9 @@ emit a Day One receipt first, then run or dispatch the deterministic workflow
 gate against the active head SHA using `.github/workflows/blank.yml` until
 `release-docker.yaml` is available. The receipt records five path-sensitive
 admissibility gates: novelty, acquisition trace, bounded efficiency, interface
-provenance, and constructive refusal.
+provenance, and constructive refusal. It also binds a maxims-of-law proof layer
+so consent, clean-hands provenance, truth, remedy, and anti-recklessness checks
+are auditable before execution.
 
 ## Staple-\u03c0 Perspective Intelligence Clause
 

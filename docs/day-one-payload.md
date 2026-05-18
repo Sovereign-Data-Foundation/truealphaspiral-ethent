@@ -17,6 +17,10 @@ workflow gate against the current head SHA.
   receipt before the workflow gate proceeds. That receipt now carries the five
   path-sensitive admissibility gates: novelty, acquisition trace, bounded
   efficiency, interface provenance, and constructive refusal.
+- The same receipt also carries a maxims-of-law proof layer. Each maxim proof is
+  hashed into the receipt so the workflow can demonstrate consent, clean hands,
+  commercial truth, remedy, bounded non-recklessness, and refusal where proof is
+  absent without storing raw sensitive proof text.
 
 ## Fail-closed invariants
 
@@ -31,15 +35,16 @@ The Day One gate must stop on any of the following conditions:
 7. missing novelty assertion;
 8. missing acquisition trace;
 9. declared search steps outside the bounded efficiency limit;
-10. missing interface provenance; or
-11. a constructive refusal basis that says execution is inadmissible.
+10. missing interface provenance;
+11. a constructive refusal basis that says execution is inadmissible; or
+12. a missing maxims-of-law proof for any required legal-equity maxim.
 
 ## Exact Day One steering command
 
 Paste this into the active agent session:
 
 ```text
-Day One payload: proceed under PR #158's merged directive. Treat PR #106 as historical substrate only. Resolve the active head SHA with `git rev-parse HEAD`. Emit the Day One receipt first with `python scripts/day_one_gate.py emit --head-sha <ACTIVE_HEAD_SHA> --workflow-name blank.yml --sovereign-intent-proof "PR #158 merged Day One directive" --receipt-path receipts/day-one-receipt.json`, then verify it with `python scripts/day_one_gate.py verify --head-sha <ACTIVE_HEAD_SHA> --workflow-name blank.yml --receipt-path receipts/day-one-receipt.json`. Only after that receipt verifies, dispatch `blank.yml` against the same active head SHA with the same sovereign-intent proof. Fail closed on any missing receipt, failed invariant, failed workflow, missing sovereign-intent proof, or failed path-sensitive gate. Do not use `release-docker.yaml` until it exists in `.github/workflows/`.
+Day One payload: proceed under PR #158's merged directive. Treat PR #106 as historical substrate only. Resolve the active head SHA with `git rev-parse HEAD`. Emit the Day One receipt first with `python scripts/day_one_gate.py emit --head-sha <ACTIVE_HEAD_SHA> --workflow-name blank.yml --sovereign-intent-proof "PR #158 merged Day One directive" --receipt-path receipts/day-one-receipt.json`, then verify it with `python scripts/day_one_gate.py verify --head-sha <ACTIVE_HEAD_SHA> --workflow-name blank.yml --receipt-path receipts/day-one-receipt.json`. Only after that receipt verifies, dispatch `blank.yml` against the same active head SHA with the same sovereign-intent proof. Fail closed on any missing receipt, failed invariant, failed workflow, missing sovereign-intent proof, failed path-sensitive gate, or failed maxims-of-law proof. Do not use `release-docker.yaml` until it exists in `.github/workflows/`.
 ```
 
 ## GitHub dispatch form
@@ -63,6 +68,23 @@ gh workflow run blank.yml \
   -f head_sha="$ACTIVE_HEAD_SHA" \
   -f sovereign_intent_proof="PR #158 merged Day One directive"
 ```
+
+## Maxims-of-law proof overrides
+
+The emitter supplies deterministic default proof text for each required maxim.
+If a steward needs to bind a stronger local proof, pass one or more overrides:
+
+```bash
+python scripts/day_one_gate.py emit \
+  --head-sha "$ACTIVE_HEAD_SHA" \
+  --workflow-name blank.yml \
+  --sovereign-intent-proof "PR #158 merged Day One directive" \
+  --maxim-proof clean_hands="receipt emitted before workflow relief" \
+  --maxim-proof truth_sovereign="claims bound to receipt hash" \
+  --receipt-path receipts/day-one-receipt.json
+```
+
+A blank maxim proof is a denial condition, not a warning.
 
 ## Operational decision
 

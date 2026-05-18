@@ -1,10 +1,12 @@
 # © 2025 Russell Nordland | TrueAlphaSpiral (TAS) | Apache-2.0
 
+import json
 from pathlib import Path
 
 import pytest
 
 from scripts.day_one_gate import (
+    MAXIMS_OF_LAW_GATE_NAMES,
     PATH_SENSITIVE_GATE_NAMES,
     active_head_sha,
     emit_receipt,
@@ -32,6 +34,11 @@ def test_day_one_receipt_emits_before_gate(tmp_path: Path):
     assert all(
         payload["path_sensitive_gates"][gate_name]["passed"]
         for gate_name in PATH_SENSITIVE_GATE_NAMES
+    )
+    assert set(MAXIMS_OF_LAW_GATE_NAMES).issubset(payload["maxims_of_law"])
+    assert all(
+        payload["maxims_of_law"][maxim_name]["passed"]
+        for maxim_name in MAXIMS_OF_LAW_GATE_NAMES
     )
     assert receipt_path.exists()
 
@@ -105,6 +112,36 @@ def test_day_one_receipt_fails_closed_on_refusal_basis(tmp_path: Path):
 
     assert not receipt_path.exists()
 
+
+
+def test_day_one_receipt_fails_closed_without_maxim_proof(tmp_path: Path):
+    receipt_path = tmp_path / "receipt.json"
+
+    with pytest.raises(RuntimeError, match="maxims_of_law_gate"):
+        emit_receipt(
+            head_sha=active_head_sha(),
+            workflow_name="blank.yml",
+            sovereign_intent_proof="PR #158 merged Day One directive",
+            maxim_proofs={"clean_hands": " "},
+            receipt_path=receipt_path,
+        )
+
+    assert not receipt_path.exists()
+
+
+def test_day_one_verify_fails_closed_on_missing_maxim_report(tmp_path: Path):
+    receipt_path = tmp_path / "receipt.json"
+    payload = emit_receipt(
+        head_sha=active_head_sha(),
+        workflow_name="blank.yml",
+        sovereign_intent_proof="PR #158 merged Day One directive",
+        receipt_path=receipt_path,
+    )
+    payload.pop("maxims_of_law")
+    receipt_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="maxim proof failed: clean_hands"):
+        verify_receipt(receipt_path=receipt_path)
 
 def test_day_one_verify_fails_closed_on_missing_receipt(tmp_path: Path):
     with pytest.raises(FileNotFoundError, match="missing Day One receipt"):

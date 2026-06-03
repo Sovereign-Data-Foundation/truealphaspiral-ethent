@@ -4,6 +4,6 @@ __pycache__/
 run.sh
 
 # Output directories
-artifacts/
+artifacts/*
+!artifacts/artifact-architecture-audit-2026-06-03.json
 ledger/
-

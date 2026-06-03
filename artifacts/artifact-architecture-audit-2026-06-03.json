@@ -1,0 +1,54 @@
+{
+  "schema": "tas.architecture_audit_artifact.v1",
+  "repository": "Sovereign-Data-Foundation/truealphaspiral-ethent",
+  "created_at_utc": "2026-06-03T17:48:41Z",
+  "status": "fail",
+  "compliance_score_binary": false,
+  "discovery": {
+    "ingress_egress_invariant_check": {
+      "result": "partial_fail",
+      "passes": [
+        "scripts/day_one_payload.sh wrapper delegates to steward script only",
+        "scripts/day-one-payload-steward.py binds intent to workflow hash and explicit command",
+        "human_api_bridge.py enforces scoped command admission/refusal and replay checks"
+      ],
+      "gaps": [
+        "codex_tas_runner.py does not enforce explicit A_0 lineage anchoring",
+        ".github/workflows/release-docker.yml includes push tag trigger in addition to workflow_dispatch"
+      ]
+    },
+    "structural_integrity_semantic_leakage": {
+      "result": "partial_fail",
+      "passes": [
+        "uvk.py performs deterministic admission control with explicit denial statuses",
+        "capability.py enforces capability rights and revocation constraints",
+        "wake_chain.py provides append-only hash-linked signed receipts",
+        "artifact_guard.py records artifact hash and wake receipt hash"
+      ],
+      "gaps": [
+        "phoenix.py rollback point selection is heuristic and not full subchain validation at selection time"
+      ]
+    },
+    "process_state_sanitization": {
+      "result": "fail",
+      "gaps": [
+        "codex_tas_runner.py has no explicit timeout/process-group termination policy",
+        "artifact_guard.py subprocess execution is unbounded and lacks orphan cleanup controls",
+        ".github/workflows/sovereign-container.yml does not include autonomous orphan-process sanitization steps",
+        "Dockerfile does not define orphan-process elimination primitives"
+      ]
+    }
+  },
+  "minimal_implementation_delta": [
+    "Restrict release-docker workflow trigger path to stewarded workflow_dispatch only",
+    "Add explicit A_0 lineage verification at ingress/egress admission surfaces",
+    "Add bounded execution and deterministic orphan-process cleanup for subprocess paths",
+    "Persist denial/anomaly artifacts for breach paths to auditable ledger locations",
+    "Strengthen Phoenix rollback target selection with verified subchain continuity"
+  ],
+  "verification_anchors": [
+    "tests/test_human_api_bridge.py",
+    "tests/test_wake_auth.py",
+    "tests/test_day_one_payload.py"
+  ]
+}

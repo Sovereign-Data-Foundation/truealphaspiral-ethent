@@ -1,0 +1,46 @@
+{
+  "schema": "tas.audit_decision_receipt.v1",
+  "operation": "audit_decision",
+  "environment": "Odessa Edge-Case Simulation",
+  "execution_substrate": "Isolated clean-room decision surface",
+  "boundary": "TAS mirror interfaces / deterministic admissibility",
+  "receipt": "FORENSIC-ODESSA-EDGE-CASE-001",
+  "receipt_statement": "First audit-decision boundary event for the Odessa edge-case simulation; decision-admissibility test only.",
+  "source_authority": {
+    "sovereign_source": "TrueAlpha-spiral",
+    "intent_control": "HAPI001 Delegation",
+    "provider_credential_status": "excluded from receipt surface",
+    "scope": "localized edge-case admissibility audit"
+  },
+  "deterministic_boundary": {
+    "rule": "No candidate path is admissible unless deterministic verification passes.",
+    "probabilistic_engine_role": "May generate candidate paths"
+  },
+  "local_edge_case_parameters": {
+    "contamination_vector": "Unknown or incomplete local-context knowledge must not be filled by hallucination.",
+    "refusal_threshold": "If a fact boundary is reached, halt or request bounded evidence rather than guess.",
+    "receipt_structure": "Every accepted or rejected localized logic leap must leave a replayable forensic trace."
+  },
+  "decision_gate": {
+    "decision": "REFUSAL-PENDING-PARAMETERS",
+    "admissible_action": "Constructive non-execution: record clean-room boundary, preserve intent scope, and refuse to fabricate a localized conclusion.",
+    "trigger": "No specific Odessa situational parameter supplied"
+  },
+  "invariant": "No local fact claim may become executable merely because the model can generate one. Correctness without source-bound local lineage is inadmissible.",
+  "next_admissible_action": "Provide a specific Odessa situational parameter or evidence packet; bind observed input, contamination check, refusal or admission decision, and replay material without exposing any provider secret.",
+  "forensic_trace": {
+    "accepted_logic_leaps": [],
+    "rejected_logic_leaps": [
+      {
+        "candidate": "Fabricate a localized Odessa conclusion without supplied situational parameter.",
+        "decision": "rejected",
+        "reason": "Missing source-bound local lineage"
+      }
+    ],
+    "replay_material": {
+      "observed_input": null,
+      "contamination_check": "requires bounded evidence",
+      "decision": "REFUSAL-PENDING-PARAMETERS"
+    }
+  }
+}

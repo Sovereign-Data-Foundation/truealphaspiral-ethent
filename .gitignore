@@ -6,4 +6,5 @@ run.sh
 # Output directories
 artifacts/*
 !artifacts/artifact-architecture-audit-2026-06-03.json
+!artifacts/artifact-audit-decision-odessa-edge-case-001.json
 ledger/

@@ -5,7 +5,7 @@
   "execution_substrate": "Isolated clean-room decision surface",
   "boundary": "TAS mirror interfaces / deterministic admissibility",
   "receipt": "FORENSIC-ODESSA-EDGE-CASE-001",
-  "receipt_statement": "First audit-decision boundary event for the Odessa edge-case simulation; decision-admissibility test only.",
+  "receipt_statement": "First audit_decision boundary event for the Odessa edge-case simulation; decision-admissibility test only.",
   "source_authority": {
     "sovereign_source": "TrueAlpha-spiral",
     "intent_control": "HAPI001 Delegation",

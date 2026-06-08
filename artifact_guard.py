@@ -63,9 +63,11 @@ def logos_gate(
     }
 
     if uvk is not None:
-        invariant_check = lambda: uvk.check_all_invariants()
+        def invariant_check() -> bool:
+            return uvk.check_all_invariants()
     else:
-        invariant_check = lambda: True
+        def invariant_check() -> bool:
+            return True
 
     loop = LogosValidationLoop(invariant_check=invariant_check)
     if not loop.evaluate_logos_bounds(current_state_hash, manifest, nonce=nonce):

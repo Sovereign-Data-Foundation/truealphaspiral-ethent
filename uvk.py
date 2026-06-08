@@ -166,6 +166,21 @@ class UVK:
     def add_invariant(self, invariant: Invariant) -> None:
         self._invariants.append(invariant)
 
+    def check_all_invariants(
+        self,
+        state: Any = None,
+        action: Any = None,
+        inputs: Any = None,
+    ) -> bool:
+        """Return True iff every registered invariant passes for the given context.
+
+        This is a convenience predicate intended for use by external validators
+        (e.g. :func:`artifact_guard.logos_gate`) that need a single boolean
+        representing the aggregate invariant health of this UVK without going
+        through the full admission workflow.
+        """
+        return all(inv(state, action, inputs) for inv in self._invariants)
+
     def remove_invariant(self, name: str) -> bool:
         before = len(self._invariants)
         self._invariants = [i for i in self._invariants if i.name != name]

@@ -60,7 +60,12 @@ class LogosValidationLoop:
 
         try:
             # 1. Lineage Trajectory Consistency
-            lineage_match = manifest.get("lineage_parent_hash") == current_state_hash
+            # Normalise: callers may supply lineage_parent_hash as hex str or bytes.
+            _lineage_ref = manifest.get("lineage_parent_hash")
+            if isinstance(_lineage_ref, bytes):
+                lineage_match = _lineage_ref == current_state_hash
+            else:
+                lineage_match = _lineage_ref == current_state_hash.hex()
 
             # 2. Invariant Alignment (Phi Check)
             invariants_held = self._invariant_check()

@@ -18,7 +18,7 @@ import subprocess
 import json
 import hashlib
 import time
-from artifact_guard import run_step
+from artifact_guard import run_step, logos_gate
 from wake_chain import reset_default_chain, get_default_chain
 from capability import CapabilityTable, Right
 from uvk import UVK, Invariant
@@ -95,6 +95,14 @@ def run_bash(script: str) -> subprocess.CompletedProcess:
             f"(failed_invariants={result.failed_invariants}, "
             f"cap_error={result.cap_error})"
         )
+
+    # Logos pre-flight: verify lineage continuity and payload density before
+    # the script is written to disk and executed.
+    logos_gate(
+        "codex_script",
+        {"source": "codex", "script_hash": hashlib.sha256(script.encode()).hexdigest()},
+        uvk=uvk,
+    )
 
     with open("run.sh", "w", encoding="utf-8") as f:
         f.write(script)

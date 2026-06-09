@@ -37,6 +37,11 @@ from typing import Any, Dict
 
 from tas_dna import A_0
 
+GENESIS_VALIDATOR_HEX_PUBKEY = "c25e2bd926a6b06549d8268ef8f94d0e9549b0de320d86928844e7c0baa4663f"
+GENESIS_VALIDATOR_ADDRESS = "A6B9C2D4E5F678901234567890ABCDEF12345678"
+GENESIS_VALIDATOR_POWER = "777"
+GENESIS_VALIDATOR_NAME = "TAS_Prime_Node_Logos"
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -114,9 +119,9 @@ def build_genesis_payload() -> Dict[str, Any]:
     """
     node0_pk = derive_node_pubkey(0)
     node1_pk = derive_node_pubkey(1)
-    val0_pk = derive_validator_pubkey(0)
+    val0_pk = GENESIS_VALIDATOR_HEX_PUBKEY
     val0_pk_b64 = _hex_to_base64(val0_pk)
-    val0_addr = derive_validator_address(val0_pk)
+    val0_addr = GENESIS_VALIDATOR_ADDRESS
 
     app_state: Dict[str, Any] = {
         "accounts": [
@@ -198,8 +203,8 @@ def build_genesis_payload() -> Dict[str, Any]:
                     "type": "tendermint/PubKeyEd25519",
                     "value": val0_pk_b64,
                 },
-                "power": "100",
-                "name": "TAS_Prime_Node",
+                "power": GENESIS_VALIDATOR_POWER,
+                "name": GENESIS_VALIDATOR_NAME,
             }
         ],
     }

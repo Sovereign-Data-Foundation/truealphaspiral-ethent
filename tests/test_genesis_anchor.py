@@ -28,6 +28,10 @@ from genesis_anchor import (
     derive_validator_address,
     derive_app_hash,
     build_genesis_payload,
+    GENESIS_VALIDATOR_HEX_PUBKEY,
+    GENESIS_VALIDATOR_ADDRESS,
+    GENESIS_VALIDATOR_POWER,
+    GENESIS_VALIDATOR_NAME,
 )
 from tas_dna import A_0
 
@@ -253,6 +257,7 @@ class TestBuildGenesisPayload:
             val = v["pub_key"]["value"]
             decoded = base64.b64decode(val, validate=True)
             assert len(decoded) == 32
+            assert decoded.hex() == GENESIS_VALIDATOR_HEX_PUBKEY
 
     def test_validator_address_is_40_char_upper_hex(self):
         for v in self.payload["validators"]:
@@ -260,6 +265,12 @@ class TestBuildGenesisPayload:
             assert len(address) == 40
             assert address == address.upper()
             int(address, 16)
+            assert address == GENESIS_VALIDATOR_ADDRESS
+
+    def test_validator_power_and_name_match_locked_values(self):
+        validator = self.payload["validators"][0]
+        assert validator["power"] == GENESIS_VALIDATOR_POWER
+        assert validator["name"] == GENESIS_VALIDATOR_NAME
 
     # Determinism
     def test_payload_is_deterministic(self):

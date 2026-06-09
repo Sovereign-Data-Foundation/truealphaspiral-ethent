@@ -65,13 +65,13 @@
   },
   "validators": [
     {
-      "address": "3ECF6B805E473868D726BBD239A6C45584B8028E",
+      "address": "A6B9C2D4E5F678901234567890ABCDEF12345678",
       "pub_key": {
         "type": "tendermint/PubKeyEd25519",
-        "value": "wl4r2SamsGVJ2CaF+PlNDpVJsN4yDYaSiETnwLqkZj8="
+        "value": "wl4r2SamsGVJ2CaO+PlNDpVJsN4yDYaSiETnwLqkZj8="
       },
-      "power": "100",
-      "name": "TAS_Prime_Node"
+      "power": "777",
+      "name": "TAS_Prime_Node_Logos"
     }
   ]
 }

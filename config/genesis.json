@@ -1,0 +1,77 @@
+{
+  "chain_id": "TAS-sovereign-01",
+  "genesis_time": "2026-06-08T21:38:50Z",
+  "initial_height": "1",
+  "app_hash": "3A9FA182A94363B1BFD8E867D28CF10407654B38B8BDD5392011BC49B6C55D6A",
+  "consensus_params": {
+    "block": {
+      "max_bytes": "22020096",
+      "max_gas": "-1",
+      "time_iota_ms": "1000"
+    },
+    "evidence": {
+      "max_age_num_blocks": "100000",
+      "max_age_duration": "172800000000000",
+      "max_bytes": "1048576"
+    },
+    "validator": {
+      "pub_key_types": [
+        "ed25519"
+      ]
+    }
+  },
+  "tas_codex_rules": {
+    "version": "1.0.0",
+    "governance_quorum_bps": 6667,
+    "slashing_fraction_double_sign_bps": 500,
+    "slashing_fraction_downtime_bps": 100,
+    "base_fee": "100",
+    "base_fee_denom": "utas"
+  },
+  "app_state": {
+    "accounts": [
+      {
+        "address": "tas1qwl879nx9t6kef_genesis_node_1",
+        "public_key": "9e01f9e1fdf5ad8bdb198b97a3c8da8338b2a9505cdccbd5bdd1ec308dd2b500",
+        "balance": "1000000000000",
+        "balance_denom": "utas",
+        "roles": [
+          "validator",
+          "governance_committee"
+        ]
+      },
+      {
+        "address": "tas1f3g4h5j6k7l8m9_genesis_node_2",
+        "public_key": "2de0e0e492447e340357f0de2b4e4bd096ee4c40c344412ec7049e23282719d2",
+        "balance": "1000000000000",
+        "balance_denom": "utas",
+        "roles": [
+          "validator"
+        ]
+      }
+    ],
+    "governance": {
+      "proposal_threshold": "1000000",
+      "proposal_threshold_denom": "utas",
+      "voting_period_seconds": "604800",
+      "authorized_amendment_addresses": [
+        "tas1qwl879nx9t6kef_genesis_node_1"
+      ]
+    },
+    "system_contracts": {
+      "registry_address": "tas_system_0000000000000000",
+      "bytecode_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "seed_validators": [
+    {
+      "address": "tas_val_genesis_0",
+      "pub_key": {
+        "type": "ed25519",
+        "value": "c25e2bd926a6b06549d82685f8f94d0e9549b0de320d86928844e7c0baa4663f"
+      },
+      "power": "100",
+      "name": "TAS_Prime_Node"
+    }
+  ]
+}

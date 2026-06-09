@@ -1,0 +1,192 @@
+"""Genesis Anchor: deterministic key and hash derivation for the TAS genesis payload.
+
+All values produced by this module are derived from the Primary Invariant A_0
+(``tas_dna.GENESIS_ISO8601 = "2025-02-15T00:00:00Z"``), ensuring every field
+in ``config/genesis.json`` is cryptographically grounded to the established
+TAS chain-of-custody before the first block is proposed.
+
+Derivation scheme
+-----------------
+Given the 32-byte A_0 lineage hash ``R``:
+
+  node_key(index)  = SHA-256(R || b"tas_node_pubkey" || index.to_bytes(1))
+  validator_key(i) = SHA-256(R || b"tas_validator_pubkey" || index.to_bytes(1))
+  app_hash(state)  = SHA-256(canonical_json(app_state_dict))
+
+These are *deterministic stub* values.  In a production deployment the real
+ed25519 keypairs must be generated with a proper HSM or offline ceremony; these
+stubs exist solely to anchor the genesis schema to the A_0 provenance root and
+to allow schema validation / testing without live keys.
+
+Version semantics (tas_codex_rules.version)
+-------------------------------------------
+  MAJOR.MINOR.PATCH follows semantic versioning:
+  - MAJOR: governance_quorum_bps or slashing parameters changed  →  hard fork.
+  - MINOR: base_fee or voting_period changed  →  soft fork via governance vote.
+  - PATCH: documentation / metadata corrections  →  no on-chain effect.
+"""
+# © 2025 Russell Nordland | TrueAlphaSpiral (TAS) | Apache-2.0
+
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Any, Dict
+
+
+from tas_dna import A_0
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _sha256(data: bytes) -> bytes:
+    return hashlib.sha256(data).digest()
+
+
+def _canonical_json(obj: Any) -> bytes:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Deterministic key derivation
+# ---------------------------------------------------------------------------
+
+def derive_node_pubkey(index: int) -> str:
+    """Return the deterministic stub ed25519 public-key hex for node *index*.
+
+    Derived as SHA-256(A_0.lineage_hash || b"tas_node_pubkey" || index_byte).
+    The result is a 64-character hex string representing 32 bytes.
+    """
+    root = A_0.lineage_hash()
+    return _sha256(root + b"tas_node_pubkey" + index.to_bytes(1, "big")).hex()
+
+
+def derive_validator_pubkey(index: int) -> str:
+    """Return the deterministic stub ed25519 public-key hex for validator *index*.
+
+    Derived as SHA-256(A_0.lineage_hash || b"tas_validator_pubkey" || index_byte).
+    """
+    root = A_0.lineage_hash()
+    return _sha256(root + b"tas_validator_pubkey" + index.to_bytes(1, "big")).hex()
+
+
+def derive_app_hash(app_state: Dict[str, Any]) -> str:
+    """Compute the deterministic app_hash over the canonical genesis app_state.
+
+    The app_hash is SHA-256 of the canonical (sorted-keys, compact) JSON of
+    *app_state*, returned as a 64-character upper-case hex string matching the
+    Tendermint / CometBFT convention.
+    """
+    return _sha256(_canonical_json(app_state)).hex().upper()
+
+
+# ---------------------------------------------------------------------------
+# Genesis payload builder
+# ---------------------------------------------------------------------------
+
+def build_genesis_payload() -> Dict[str, Any]:
+    """Return the fully-populated TAS genesis payload as a Python dict.
+
+    Encoding conventions
+    --------------------
+    - ``governance_quorum_bps``  : integer basis points (10 000 = 100 %).
+                                   6667 bp  ≈  66.67 %.
+    - ``base_fee``               : integer amount in ``base_fee_denom`` units.
+    - ``base_fee_denom``         : denomination string (``"utas"`` = micro-TAS).
+    - ``pub_key_types``          : ``["ed25519"]`` only — secp256k1 dropped to
+                                   reduce validator key attack surface; EVM
+                                   interop is not a near-term requirement.
+    - ``app_hash``               : deterministic SHA-256 of canonical app_state
+                                   (upper-case hex per CometBFT convention).
+    """
+    node0_pk = derive_node_pubkey(0)
+    node1_pk = derive_node_pubkey(1)
+    val0_pk  = derive_validator_pubkey(0)
+
+    app_state: Dict[str, Any] = {
+        "accounts": [
+            {
+                "address": "tas1qwl879nx9t6kef_genesis_node_1",
+                "public_key": node0_pk,
+                "balance": "1000000000000",
+                "balance_denom": "utas",
+                "roles": ["validator", "governance_committee"],
+            },
+            {
+                "address": "tas1f3g4h5j6k7l8m9_genesis_node_2",
+                "public_key": node1_pk,
+                "balance": "1000000000000",
+                "balance_denom": "utas",
+                "roles": ["validator"],
+            },
+        ],
+        "governance": {
+            "proposal_threshold": "1000000",
+            "proposal_threshold_denom": "utas",
+            "voting_period_seconds": "604800",
+            "authorized_amendment_addresses": [
+                "tas1qwl879nx9t6kef_genesis_node_1",
+            ],
+        },
+        "system_contracts": {
+            "registry_address": "tas_system_0000000000000000",
+            "bytecode_hash": (
+                "e3b0c44298fc1c149afbf4c8996fb924"
+                "27ae41e4649b934ca495991b7852b855"
+            ),
+        },
+    }
+
+    app_hash = derive_app_hash(app_state)
+
+    return {
+        "chain_id": "TAS-sovereign-01",
+        "genesis_time": "2026-06-08T21:38:50Z",
+        "initial_height": "1",
+        "app_hash": app_hash,
+
+        "consensus_params": {
+            "block": {
+                "max_bytes": "22020096",
+                "max_gas": "-1",
+                "time_iota_ms": "1000",
+            },
+            "evidence": {
+                "max_age_num_blocks": "100000",
+                "max_age_duration": "172800000000000",
+                "max_bytes": "1048576",
+            },
+            "validator": {
+                # secp256k1 intentionally excluded: see module docstring.
+                "pub_key_types": ["ed25519"],
+            },
+        },
+
+        "tas_codex_rules": {
+            # Version semantics: MAJOR.MINOR.PATCH — see module docstring.
+            "version": "1.0.0",
+            # Basis-point encoding: 10 000 bp = 100 %; 6667 bp ≈ 66.67 %.
+            # Integer arithmetic eliminates cross-node floating-point drift.
+            "governance_quorum_bps": 6667,
+            "slashing_fraction_double_sign_bps": 500,
+            "slashing_fraction_downtime_bps": 100,
+            "base_fee": "100",
+            "base_fee_denom": "utas",
+        },
+
+        "app_state": app_state,
+
+        "seed_validators": [
+            {
+                "address": "tas_val_genesis_0",
+                "pub_key": {
+                    "type": "ed25519",
+                    "value": val0_pk,
+                },
+                "power": "100",
+                "name": "TAS_Prime_Node",
+            }
+        ],
+    }

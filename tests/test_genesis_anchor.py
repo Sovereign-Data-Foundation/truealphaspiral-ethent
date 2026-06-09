@@ -28,10 +28,14 @@ from genesis_anchor import (
     derive_validator_address,
     derive_app_hash,
     build_genesis_payload,
+    build_genesis_tx0_payload,
     GENESIS_VALIDATOR_HEX_PUBKEY,
     GENESIS_VALIDATOR_ADDRESS,
     GENESIS_VALIDATOR_POWER,
     GENESIS_VALIDATOR_NAME,
+    GENESIS_TRACE_PARENT_HASH,
+    GENESIS_PARADATA_BINDING,
+    LOGOS_SYSTEM_LABEL,
 )
 from tas_dna import A_0
 
@@ -100,6 +104,11 @@ class TestDeriveValidatorAddress:
         assert len(address) == 40
         assert address == address.upper()
         int(address, 16)
+
+    def test_locked_validator_address_constant_is_valid_hex(self):
+        assert len(GENESIS_VALIDATOR_ADDRESS) == 40
+        assert GENESIS_VALIDATOR_ADDRESS == GENESIS_VALIDATOR_ADDRESS.upper()
+        int(GENESIS_VALIDATOR_ADDRESS, 16)
 
 
 # ---------------------------------------------------------------------------
@@ -314,3 +323,54 @@ class TestGenesisJsonFile:
             data = json.load(f)
         expected = derive_app_hash(data["app_state"])
         assert data["app_hash"] == expected
+
+
+class TestGenesisTx0Payload:
+    def setup_method(self):
+        self.tx0 = build_genesis_tx0_payload()
+
+    def test_msg_declare_axiom_envelope(self):
+        msg = self.tx0["body"]["messages"][0]
+        assert msg["@type"] == "/tas.logos.v1.MsgDeclareAxiom"
+        assert msg["creator"] == GENESIS_VALIDATOR_ADDRESS
+        assert msg["parent_trace_hash"] == GENESIS_TRACE_PARENT_HASH
+        assert msg["paradata_binding"] == GENESIS_PARADATA_BINDING
+
+    def test_tx0_memo_includes_logos_system_label(self):
+        memo = self.tx0["body"]["memo"]
+        assert LOGOS_SYSTEM_LABEL in memo
+
+    def test_signer_pubkey_matches_locked_validator_key(self):
+        key = self.tx0["auth_info"]["signer_infos"][0]["public_key"]["key"]
+        decoded = base64.b64decode(key, validate=True)
+        assert decoded.hex() == GENESIS_VALIDATOR_HEX_PUBKEY
+
+    def test_signer_sequence_and_mode(self):
+        signer = self.tx0["auth_info"]["signer_infos"][0]
+        assert signer["sequence"] == "0"
+        assert signer["mode_info"]["single"]["mode"] == "SIGN_MODE_DIRECT"
+
+    def test_bootstrap_fee_gas_limit(self):
+        fee = self.tx0["auth_info"]["fee"]
+        assert fee["amount"] == []
+        assert fee["gas_limit"] == "777000"
+
+    def test_tx0_signatures_placeholder_present(self):
+        assert len(self.tx0["signatures"]) == 1
+
+    def test_payload_is_deterministic(self):
+        assert build_genesis_tx0_payload() == build_genesis_tx0_payload()
+
+
+class TestGenesisTx0JsonFile:
+    def test_config_genesis_tx0_json_exists(self):
+        import pathlib
+        path = pathlib.Path(__file__).resolve().parents[1] / "config" / "genesis-tx0.json"
+        assert path.exists(), "config/genesis-tx0.json must exist"
+
+    def test_config_genesis_tx0_json_is_valid_json(self):
+        import pathlib
+        path = pathlib.Path(__file__).resolve().parents[1] / "config" / "genesis-tx0.json"
+        with open(path) as f:
+            data = json.load(f)
+        assert data["body"]["messages"][0]["@type"] == "/tas.logos.v1.MsgDeclareAxiom"

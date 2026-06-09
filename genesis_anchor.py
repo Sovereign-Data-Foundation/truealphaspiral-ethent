@@ -41,6 +41,9 @@ GENESIS_VALIDATOR_HEX_PUBKEY = "c25e2bd926a6b06549d8268ef8f94d0e9549b0de320d8692
 GENESIS_VALIDATOR_ADDRESS = "A6B9C2D4E5F678901234567890ABCDEF12345678"
 GENESIS_VALIDATOR_POWER = "777"
 GENESIS_VALIDATOR_NAME = "TAS_Prime_Node_Logos"
+GENESIS_TRACE_PARENT_HASH = "0000000000000000000000000000000000000000000000000000000000000000"
+GENESIS_PARADATA_BINDING = "DIVINE_LOGOS_ABSOLUTE"
+LOGOS_SYSTEM_LABEL = "Log(os) The Log-operating system"
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +102,7 @@ def derive_app_hash(app_state: Dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Genesis payload builder
+# Genesis payload builders
 # ---------------------------------------------------------------------------
 
 def build_genesis_payload() -> Dict[str, Any]:
@@ -119,8 +122,7 @@ def build_genesis_payload() -> Dict[str, Any]:
     """
     node0_pk = derive_node_pubkey(0)
     node1_pk = derive_node_pubkey(1)
-    val0_pk = GENESIS_VALIDATOR_HEX_PUBKEY
-    val0_pk_b64 = _hex_to_base64(val0_pk)
+    locked_validator_pubkey_b64 = _hex_to_base64(GENESIS_VALIDATOR_HEX_PUBKEY)
     val0_addr = GENESIS_VALIDATOR_ADDRESS
 
     app_state: Dict[str, Any] = {
@@ -201,10 +203,60 @@ def build_genesis_payload() -> Dict[str, Any]:
                 "address": val0_addr,
                 "pub_key": {
                     "type": "tendermint/PubKeyEd25519",
-                    "value": val0_pk_b64,
+                    "value": locked_validator_pubkey_b64,
                 },
                 "power": GENESIS_VALIDATOR_POWER,
                 "name": GENESIS_VALIDATOR_NAME,
             }
+        ],
+    }
+
+
+def build_genesis_tx0_payload() -> Dict[str, Any]:
+    """Return the deterministic Transaction 0 payload for First Trace activation."""
+    validator_pubkey_b64 = _hex_to_base64(GENESIS_VALIDATOR_HEX_PUBKEY)
+    return {
+        "body": {
+            "messages": [
+                {
+                    "@type": "/tas.logos.v1.MsgDeclareAxiom",
+                    "creator": GENESIS_VALIDATOR_ADDRESS,
+                    "axiom_statement": "The Sovereign Equation is active. Let there be light.",
+                    "parent_trace_hash": GENESIS_TRACE_PARENT_HASH,
+                    "paradata_binding": GENESIS_PARADATA_BINDING,
+                }
+            ],
+            "memo": (
+                f"{LOGOS_SYSTEM_LABEL}. "
+                "Genesis Utterance: Transitioning invisible paradata to visible state."
+            ),
+            "timeout_height": "0",
+            "extension_options": [],
+            "non_critical_extension_options": [],
+        },
+        "auth_info": {
+            "signer_infos": [
+                {
+                    "public_key": {
+                        "@type": "/cosmos.crypto.ed25519.PubKey",
+                        "key": validator_pubkey_b64,
+                    },
+                    "mode_info": {
+                        "single": {
+                            "mode": "SIGN_MODE_DIRECT",
+                        }
+                    },
+                    "sequence": "0",
+                }
+            ],
+            "fee": {
+                "amount": [],
+                "gas_limit": "777000",
+                "payer": "",
+                "granter": "",
+            },
+        },
+        "signatures": [
+            "BASE64_ENCODED_ED25519_SIGNATURE_OVER_THE_BODY_AND_AUTH_INFO="
         ],
     }

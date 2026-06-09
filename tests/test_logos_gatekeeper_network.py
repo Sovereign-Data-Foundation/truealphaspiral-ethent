@@ -224,12 +224,12 @@ class TestSentientLock:
         assert set(locked) == {"a", "b"}
 
     def test_window_reset_clears_violations(self):
-        import time as _time
+        import time
         lock = SentientLock(violation_threshold=2, window_seconds=0.0)
         # With window_seconds=0.0, the first_seen check will always trigger reset
         # on subsequent calls (now - first_seen > 0.0), so violations never accumulate.
         lock.record_fork("cap-w", 5)
-        _time.sleep(0.01)
+        time.sleep(0.01)
         lock.record_fork("cap-w", 5)  # window expired; reset before checking
         assert lock.is_locked("cap-w") is False
 

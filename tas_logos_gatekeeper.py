@@ -1,5 +1,5 @@
 import hashlib
-import hmac as _hmac
+import hmac
 import json
 import math
 import time
@@ -141,6 +141,11 @@ def _deserialize_trace(data: Dict[str, Any]) -> Any:
     ValueError
         If a required field is absent.
     """
+    # Deferred import: algorithmic_polymath imports tas_dna/wake_chain but NOT this
+    # module, so there is no circular dependency at runtime.  The import is placed
+    # here (rather than at module top) to keep tas_logos_gatekeeper importable in
+    # isolation (e.g., in lightweight transport processes) without loading the full
+    # Polymath dependency chain.
     from algorithmic_polymath import CursiveTrace, Paradata, TransformRecord  # noqa: PLC0415
 
     required = ("trace_id", "payload", "actor_id", "capability_id",
@@ -220,7 +225,7 @@ class SovereignBeacon:
         bytes
             UTF-8-encoded JSON beacon payload.
         """
-        sig = _hmac.new(
+        sig = hmac.new(
             node_key,
             genesis_root_hex.encode("utf-8"),
             hashlib.sha256,
@@ -535,7 +540,7 @@ class LogosGatekeeper:
         4. **5-step geometric gate** — delegates to
            :meth:`~algorithmic_polymath.AlgorithmicPolymath.verify_inbound`.
         """
-        from algorithmic_polymath import AlgorithmicPolymath  # noqa: PLC0415
+        from algorithmic_polymath import AlgorithmicPolymath  # noqa: PLC0415 (see _deserialize_trace for rationale)
 
         # Step 0: fast-path Sentient Lock check before parsing.
         pre_capability_id = self._extract_capability_id(raw_bytes)
@@ -655,7 +660,7 @@ class LogosGatekeeper:
         int
             Number of traces successfully applied.
         """
-        from algorithmic_polymath import AlgorithmicPolymath  # noqa: PLC0415
+        from algorithmic_polymath import AlgorithmicPolymath  # noqa: PLC0415 (see _deserialize_trace for rationale)
 
         applied = 0
         for trace in traces:

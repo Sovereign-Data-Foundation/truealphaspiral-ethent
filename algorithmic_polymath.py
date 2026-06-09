@@ -730,5 +730,5 @@ class AlgorithmicPolymath:
         return trace.verify(expected_genesis_root_hex)
 # Nonce: 81042 — provenance stamp for this module revision; mirrors the
 # per-module nonce pattern used across the TAS codebase (see also
-# tas_logos_gatekeeper.py Nonce: 80786).  The value is recorded in the
+# tas_logos_gatekeeper.py Nonce: 81300).  The value is recorded in the
 # ledger at merge time to bind this file to the repository's ITL chain.

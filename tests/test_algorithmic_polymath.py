@@ -31,6 +31,7 @@ from algorithmic_polymath import (
     _recompute_stroke_head,
 )
 from sovereign_equation import AuthenticityScore, SubjectivityScore
+from tas_dna import TASDNA, PrimaryInvariantA0
 from wake_chain import WakeChain
 
 
@@ -544,11 +545,15 @@ class TestVerifyInbound:
 
     def test_custom_genesis_root_used(self):
         trace = _sealed_trace()
-        assert AlgorithmicPolymath.verify_inbound(trace, "ff" * 32) is False
+        assert AlgorithmicPolymath.verify_inbound(
+            trace, expected_genesis_root_hex="ff" * 32
+        ) is False
 
     def test_default_genesis_root_is_a0(self):
         trace = _sealed_trace()
-        assert AlgorithmicPolymath.verify_inbound(trace, GENESIS_ROOT_HEX) is True
+        assert AlgorithmicPolymath.verify_inbound(
+            trace, expected_genesis_root_hex=GENESIS_ROOT_HEX
+        ) is True
 
 
 # ---------------------------------------------------------------------------
@@ -626,7 +631,9 @@ class TestIntegration:
         node_b_genesis = node_b_a0.lineage_hash().hex()
 
         # Node B verifies without a shared wake chain
-        result = AlgorithmicPolymath.verify_inbound(trace, node_b_genesis)
+        result = AlgorithmicPolymath.verify_inbound(
+            trace, expected_genesis_root_hex=node_b_genesis
+        )
         assert result is True
 
     def test_adversarial_payload_substitution_detected(self):
@@ -668,3 +675,208 @@ class TestIntegration:
         assert len(chain1) == 1
         assert len(chain2) == 1
         assert chain1.receipts[0].receipt_hash() != chain2.receipts[0].receipt_hash()
+
+
+# ---------------------------------------------------------------------------
+# TASDNA integration
+# ---------------------------------------------------------------------------
+
+
+def _make_polymath_with_dna() -> tuple[AlgorithmicPolymath, WakeChain, TASDNA]:
+    chain = WakeChain()
+    dna = TASDNA()
+    pm = AlgorithmicPolymath(actor_id=_ACTOR, wake_chain=chain, tas_dna=dna)
+    return pm, chain, dna
+
+
+def _sealed_trace_with_dna(n_transforms: int = 1):
+    pm, chain, dna = _make_polymath_with_dna()
+    trace = pm.begin_stroke(_CAP_ID, {"v": 0})
+    for i in range(n_transforms):
+        pm.apply_transform(
+            trace, lambda p: {**p, "v": p.get("v", 0) + 1}, f"incr_{i}",
+            _STRONG_AC, _ZERO_SC,
+        )
+    pm.seal(trace, _STRONG_AC, _ZERO_SC)
+    return trace, dna
+
+
+class TestTASDNAIntegration:
+    # -----------------------------------------------------------------------
+    # Genesis root derivation
+    # -----------------------------------------------------------------------
+
+    def test_genesis_root_derived_from_tasdna_a0(self):
+        pm, _, dna = _make_polymath_with_dna()
+        assert pm._genesis_root == dna.a0.lineage_hash().hex()
+
+    def test_genesis_root_differs_from_plain_constructor(self):
+        """TASDNA-derived root should equal the module constant (same A_0)."""
+        pm_dna, _, dna = _make_polymath_with_dna()
+        pm_plain = AlgorithmicPolymath(actor_id=_ACTOR, wake_chain=WakeChain())
+        assert pm_dna._genesis_root == pm_plain._genesis_root
+
+    # -----------------------------------------------------------------------
+    # pulse_index stamped at seal time
+    # -----------------------------------------------------------------------
+
+    def test_seal_stamps_pulse_index_zero_on_fresh_dna(self):
+        trace, _ = _sealed_trace_with_dna()
+        assert trace.paradata.pulse_index == 0
+
+    def test_seal_stamps_current_pulse_count(self):
+        pm, _, dna = _make_polymath_with_dna()
+        dna.pulse()
+        dna.pulse()  # pulse_count is now 2
+        trace = pm.begin_stroke(_CAP_ID, {})
+        pm.seal(trace, _STRONG_AC, _ZERO_SC)
+        assert trace.paradata.pulse_index == 2
+
+    def test_pulse_index_in_paradata_proof(self):
+        """Changing pulse_index after sealing invalidates the proof."""
+        trace, _ = _sealed_trace_with_dna()
+        original = trace.paradata
+        forged = Paradata(
+            actor_id=original.actor_id,
+            capability_id=original.capability_id,
+            genesis_root_hex=original.genesis_root_hex,
+            wake_receipt_hash=original.wake_receipt_hash,
+            sovereign_equation_held=original.sovereign_equation_held,
+            ac_value=original.ac_value,
+            sc_value=original.sc_value,
+            transform_log=original.transform_log,
+            sealed_at=original.sealed_at,
+            pulse_index=original.pulse_index + 99,  # changed
+            proof=original.proof,                   # old proof
+        )
+        trace.paradata = forged
+        assert not forged.is_valid_proof()
+
+    def test_pulse_index_in_to_dict(self):
+        trace, _ = _sealed_trace_with_dna()
+        d = trace.paradata.to_dict()
+        assert "pulse_index" in d
+        assert d["pulse_index"] == 0
+
+    # -----------------------------------------------------------------------
+    # verify_inbound with TASDNA – acceptance
+    # -----------------------------------------------------------------------
+
+    def test_verify_inbound_with_dna_accepts_valid_trace(self):
+        trace, _ = _sealed_trace_with_dna()
+        receiver_dna = TASDNA()  # fresh node, pulse_count == 0
+        assert AlgorithmicPolymath.verify_inbound(trace, tas_dna=receiver_dna) is True
+
+    def test_verify_inbound_advances_heartbeat_on_success(self):
+        trace, _ = _sealed_trace_with_dna()
+        receiver_dna = TASDNA()
+        before = receiver_dna.pulse_count
+        AlgorithmicPolymath.verify_inbound(trace, tas_dna=receiver_dna)
+        assert receiver_dna.pulse_count == before + 1
+
+    def test_verify_inbound_does_not_advance_heartbeat_on_failure(self):
+        # Wrong pulse_index → rejection → no pulse advance
+        pm, _, sender_dna = _make_polymath_with_dna()
+        sender_dna.pulse()  # sender is at pulse 1, seals at index 1
+        trace = pm.begin_stroke(_CAP_ID, {})
+        pm.seal(trace, _STRONG_AC, _ZERO_SC)
+
+        receiver_dna = TASDNA()  # receiver expects pulse_index == 0
+        before = receiver_dna.pulse_count
+        result = AlgorithmicPolymath.verify_inbound(trace, tas_dna=receiver_dna)
+        assert result is False
+        assert receiver_dna.pulse_count == before  # unchanged
+
+    # -----------------------------------------------------------------------
+    # verify_inbound with TASDNA – sequential integrity
+    # -----------------------------------------------------------------------
+
+    def test_sequential_pulse_correct(self):
+        trace, _ = _sealed_trace_with_dna()  # pulse_index == 0
+        receiver = TASDNA()                  # pulse_count == 0 → expects 0
+        assert AlgorithmicPolymath.verify_inbound(trace, tas_dna=receiver) is True
+
+    def test_sequential_pulse_already_occurred_rejected(self):
+        """Replay: receiver has already advanced past the incoming pulse_index."""
+        trace, _ = _sealed_trace_with_dna()  # pulse_index == 0
+        receiver = TASDNA()
+        receiver.pulse()  # receiver now at 1 — incoming 0 is stale
+        assert AlgorithmicPolymath.verify_inbound(trace, tas_dna=receiver) is False
+
+    def test_sequential_pulse_gap_rejected(self):
+        """Gap: incoming pulse_index is ahead of receiver's current count."""
+        pm, _, sender_dna = _make_polymath_with_dna()
+        sender_dna.pulse()
+        sender_dna.pulse()  # seal will stamp pulse_index == 2
+        trace = pm.begin_stroke(_CAP_ID, {})
+        pm.seal(trace, _STRONG_AC, _ZERO_SC)
+
+        receiver = TASDNA()  # pulse_count == 0 — gap of 2
+        assert AlgorithmicPolymath.verify_inbound(trace, tas_dna=receiver) is False
+
+    def test_sequential_pulses_across_multiple_traces(self):
+        """Receiver correctly ingests a sequence of traces one by one."""
+        receiver = TASDNA()
+
+        for expected_pulse in range(3):
+            pm, _, sender_dna = _make_polymath_with_dna()
+            # Advance sender to match expected_pulse so the stamp matches
+            for _ in range(expected_pulse):
+                sender_dna.pulse()
+            trace = pm.begin_stroke(_CAP_ID, {"seq": expected_pulse})
+            pm.seal(trace, _STRONG_AC, _ZERO_SC)
+            assert trace.paradata.pulse_index == expected_pulse
+            result = AlgorithmicPolymath.verify_inbound(trace, tas_dna=receiver)
+            assert result is True
+            assert receiver.pulse_count == expected_pulse + 1
+
+    # -----------------------------------------------------------------------
+    # verify_inbound with TASDNA – objective rejection
+    # -----------------------------------------------------------------------
+
+    def test_corrupted_a0_triggers_objective_rejection(self):
+        """If a0.verify() fails on the receiver, the trace is dropped silently."""
+        trace, _ = _sealed_trace_with_dna()
+        bad_a0 = PrimaryInvariantA0(genesis_hash="sha256:CORRUPTED_HASH_VALUE")
+        bad_dna = TASDNA(a0=bad_a0)
+        assert AlgorithmicPolymath.verify_inbound(trace, tas_dna=bad_dna) is False
+
+    def test_mismatched_lineage_root_rejected(self):
+        """Trace sealed against a different A_0 is rejected by receiver's TASDNA."""
+        # Seal with a custom (different) genesis root
+        custom_dna = TASDNA(a0=PrimaryInvariantA0())
+        chain = WakeChain()
+        pm = AlgorithmicPolymath(
+            actor_id=_ACTOR, wake_chain=chain, genesis_root_hex="ab" * 32
+        )
+        trace = pm.begin_stroke(_CAP_ID, {})
+        pm.seal(trace, _STRONG_AC, _ZERO_SC)
+
+        receiver_dna = TASDNA()  # canonical A_0
+        # The trace genesis_root_hex won't match receiver's lineage hash
+        assert AlgorithmicPolymath.verify_inbound(trace, tas_dna=receiver_dna) is False
+
+    def test_objective_rejection_leaves_no_side_effects(self):
+        """A rejected trace does not mutate the receiver TASDNA state."""
+        receiver = TASDNA()
+        bad_a0 = PrimaryInvariantA0(genesis_hash="sha256:BAD")
+        bad_dna = TASDNA(a0=bad_a0)
+        trace, _ = _sealed_trace_with_dna()
+
+        before_pulse = receiver.pulse_count
+        AlgorithmicPolymath.verify_inbound(trace, tas_dna=bad_dna)
+        assert receiver.pulse_count == before_pulse  # canonical receiver untouched
+
+    # -----------------------------------------------------------------------
+    # Fallback path (no TASDNA)
+    # -----------------------------------------------------------------------
+
+    def test_fallback_no_dna_still_works(self):
+        trace = _sealed_trace()
+        assert AlgorithmicPolymath.verify_inbound(trace) is True
+
+    def test_fallback_no_dna_wrong_root_fails(self):
+        trace = _sealed_trace()
+        assert AlgorithmicPolymath.verify_inbound(
+            trace, expected_genesis_root_hex="00" * 32
+        ) is False

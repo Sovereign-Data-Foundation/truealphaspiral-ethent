@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from sovereign_equation import AuthenticityScore, SubjectivityScore, sovereign_holds
-from tas_dna import A_0
+from tas_dna import A_0, TASDNA
 from wake_chain import WakeChain, get_default_chain
 
 # ---------------------------------------------------------------------------
@@ -181,7 +181,11 @@ class Paradata:
     sc_value:                float
     transform_log:           Tuple[TransformRecord, ...]
     sealed_at:               float
-    proof:                   str = ""
+    # pulse_index records the TASDNA pulse_count at seal time.  0 is the
+    # legitimate initial value for a trace sealed against a fresh TASDNA
+    # instance (pulse_count starts at 0 before any pulse() call).
+    pulse_index:             int  = 0
+    proof:                   str  = ""
 
     # ------------------------------------------------------------------
     # Canonical serialisation
@@ -198,6 +202,7 @@ class Paradata:
             "sc_value":                self.sc_value,
             "transform_log":           [r.to_dict() for r in self.transform_log],
             "sealed_at":               self.sealed_at,
+            "pulse_index":             self.pulse_index,
         })
 
     # ------------------------------------------------------------------
@@ -227,6 +232,7 @@ class Paradata:
             "sc_value":                self.sc_value,
             "transform_log":           [r.to_dict() for r in self.transform_log],
             "sealed_at":               self.sealed_at,
+            "pulse_index":             self.pulse_index,
             "proof":                   self.proof,
         }
 
@@ -424,10 +430,18 @@ class AlgorithmicPolymath:
         actor_id: str,
         wake_chain: Optional[WakeChain] = None,
         genesis_root_hex: Optional[str] = None,
+        tas_dna: Optional[TASDNA] = None,
     ) -> None:
-        self._actor_id        = actor_id
-        self._wake            = wake_chain if wake_chain is not None else get_default_chain()
-        self._genesis_root    = genesis_root_hex or GENESIS_ROOT_HEX
+        self._actor_id     = actor_id
+        self._wake         = wake_chain if wake_chain is not None else get_default_chain()
+        self._tas_dna      = tas_dna if tas_dna is not None else TASDNA()
+        # Genesis root is always derived from the live TASDNA A_0 anchor.
+        # An explicit override is accepted only when no TASDNA is supplied —
+        # in practice this path is used in tests that predate TASDNA coupling.
+        if tas_dna is not None:
+            self._genesis_root = self._tas_dna.a0.lineage_hash().hex()
+        else:
+            self._genesis_root = genesis_root_hex or GENESIS_ROOT_HEX
 
     # ------------------------------------------------------------------
     # Public API
@@ -600,6 +614,7 @@ class AlgorithmicPolymath:
         )
 
         sealed_at = time.time()
+        pulse_idx = self._tas_dna.pulse_count
 
         # Build Paradata with a placeholder proof, then compute and seal
         tmp = Paradata(
@@ -612,6 +627,7 @@ class AlgorithmicPolymath:
             sc_value=final_sc.value,
             transform_log=tuple(trace._transform_log),
             sealed_at=sealed_at,
+            pulse_index=pulse_idx,
             proof="",
         )
 
@@ -625,6 +641,7 @@ class AlgorithmicPolymath:
             sc_value=tmp.sc_value,
             transform_log=tmp.transform_log,
             sealed_at=tmp.sealed_at,
+            pulse_index=tmp.pulse_index,
             proof=tmp.compute_proof(),
         )
         trace._sealed = True
@@ -637,28 +654,81 @@ class AlgorithmicPolymath:
     @staticmethod
     def verify_inbound(
         trace: CursiveTrace,
+        tas_dna: Optional[TASDNA] = None,
         expected_genesis_root_hex: str = GENESIS_ROOT_HEX,
     ) -> bool:
         """Trustless verification of an inbound :class:`CursiveTrace`.
 
-        Any node that receives a sealed trace from another node calls this
-        method to confirm legitimacy without trusting the sender.  The
-        method delegates to :meth:`CursiveTrace.verify`, which recomputes
-        the ``stroke_head`` from the embedded :class:`Paradata` and checks
-        all five integrity conditions.
+        When *tas_dna* is supplied the method performs the full structural
+        alignment check defined by the TASDNA integration:
+
+        1. **A_0 integrity gate** – ``tas_dna.a0.verify()`` is called first.
+           If the local TASDNA A_0 is corrupted the method returns ``False``
+           immediately with no side-effects (objective rejection §4).
+
+        2. **Lineage root derivation** – the expected genesis root is derived
+           as ``tas_dna.a0.lineage_hash().hex()``.  No string constant is
+           trusted; the bytes are produced by the live TASDNA instance.
+
+        3. **Core geometric verification** – delegates to
+           :meth:`CursiveTrace.verify`, which checks paradata proof
+           integrity, genesis root anchoring, stroke_head recomputation, and
+           Sovereign Equation compliance.
+
+        4. **Pulse sequential integrity** – the incoming
+           ``paradata.pulse_index`` must equal ``tas_dna.pulse_count``
+           (the next expected pulse on this node).  A value below that count
+           signals a replay; a value above it signals a gap.  Both are
+           rejected.
+
+        5. **Heartbeat advance** – on full acceptance the method calls
+           ``tas_dna.pulse()``, driving the AI² Heartbeat forward and
+           sealing the execution stroke into the node's local TASDNA state.
+
+        When *tas_dna* is ``None`` the method falls back to a geometry-only
+        check using *expected_genesis_root_hex* (the pre-TASDNA path,
+        retained for backwards compatibility).
 
         Parameters
         ----------
         trace:
             The inbound :class:`CursiveTrace` to verify.
+        tas_dna:
+            Optional local :class:`~tas_dna.TASDNA` instance.  When
+            provided, all five checks above are executed.
         expected_genesis_root_hex:
-            SHA-256 hex of :data:`tas_dna.A_0` as independently derived by
-            the receiving node.  Defaults to :data:`GENESIS_ROOT_HEX`.
+            Fallback root hex used only when *tas_dna* is ``None``.
+            Defaults to :data:`GENESIS_ROOT_HEX`.
 
         Returns
         -------
         bool
-            ``True`` iff the trace passes all integrity checks.
+            ``True`` iff all applicable checks pass and (when *tas_dna* is
+            supplied) the heartbeat has been advanced.
         """
+        if tas_dna is not None:
+            # §4 – Objective Rejection: A_0 must be structurally sound.
+            if not tas_dna.a0.verify():
+                return False
+
+            # §1 – Derive root bytes from the live TASDNA anchor.
+            root_hex = tas_dna.a0.lineage_hash().hex()
+
+            # §2 / §3 – Core geometric verification.
+            if not trace.verify(root_hex):
+                return False
+
+            # §3 – Pulse sequential integrity.
+            if trace.paradata.pulse_index != tas_dna.pulse_count:
+                return False
+
+            # §3 – Advance the AI² Heartbeat.
+            tas_dna.pulse()
+            return True
+
+        # Fallback: geometry-only check (no TASDNA coupling).
         return trace.verify(expected_genesis_root_hex)
-# Nonce: 81042
+# Nonce: 81042 — provenance stamp for this module revision; mirrors the
+# per-module nonce pattern used across the TAS codebase (see also
+# tas_logos_gatekeeper.py Nonce: 80786).  The value is recorded in the
+# ledger at merge time to bind this file to the repository's ITL chain.

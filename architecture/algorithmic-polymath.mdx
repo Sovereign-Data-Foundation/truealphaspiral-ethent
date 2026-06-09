@@ -1,0 +1,111 @@
+# Algorithmic Polymath: Cursive Computation Engine
+
+## Definition
+
+The Algorithmic Polymath is the structural synthesizer that bridges
+isolated decentralized nodes without a central coordinator.
+
+It achieves this by fusing three mechanisms into a single execution path:
+cursive computation, paradata synthesis, and cross-node verification.
+Every operation it processes becomes self-verifying by objective
+mathematics — no node needs to trust any other.
+
+---
+
+## The Five Structural Guarantees
+
+### 1. Cursive Computation
+
+Traditional execution is stateless: data enters a function, output
+leaves, and the computation is forgotten.
+
+The Polymath prevents this by wrapping every operation in an
+**unbroken stroke**. As computation advances through transforms, the
+stroke_head accumulates:
+
+```
+stroke_0 = SHA-256(actor_id | capability_id | genesis_root_hex)
+stroke_i = SHA-256(stroke_{i-1} | transform_name | output_hash)
+```
+
+The state, the exact mathematical transformations applied, and the
+identity of the sovereign actor are structurally bound to the operation
+at every step. The stroke is never lifted.
+
+### 2. Paradata Synthesis
+
+Because the stroke leaves an active trace, that trace is formalized into
+**paradata** — the self-contained proof of legitimacy fused to the
+execution payload.
+
+Paradata records:
+
+- The sovereign actor and capability token (Deterministic Agency)
+- The genesis root hex (cryptographic root anchoring)
+- The wake receipt hash (provenance chain entry)
+- The Sovereign Equation result — whether A_C > S_C held
+- The complete transform log with output hashes
+- The TASDNA pulse index at seal time (temporal sequence)
+- A SHA-256 proof commitment over all of the above
+
+When an operation leaves Node A, it arrives at Node B as a unified
+construct: payload and proof travel together.
+
+### 3. TASDNA Root Anchoring
+
+The expected genesis root is never a string constant stored by a central
+service. It is derived live from the local TASDNA A_0 anchor:
+
+```python
+expected_root = tas_dna.a0.lineage_hash()
+```
+
+Because `lineage_hash()` commits the ISO timestamp, Unix epoch, hash
+tag, and origin authority into 32 bytes via SHA-256, it is
+mathematically impossible to forge. Every node independently produces
+the same root — no coordinator required.
+
+### 4. Pulse Sequential Integrity
+
+The TASDNA instance maintains a `pulse_count` — the number of
+execution strokes the node has ingested since genesis.
+
+At seal time, `pulse_index = tas_dna.pulse_count` is stamped into the
+paradata. At verification time, the receiving node checks:
+
+```
+paradata.pulse_index == receiver_tas_dna.pulse_count
+```
+
+A value below that count is a replay. A value above it is a gap. Both
+are rejected. On acceptance, `tas_dna.pulse()` is called, advancing
+the AI² Heartbeat and sealing the stroke into local state.
+
+### 5. Objective Rejection
+
+If `a0.verify()` fails, or if the paradata does not align with the
+lineage root, or if the pulse sequence is out of order — the execution
+is dropped. There is no quarantine, no admin alert, no subjective
+moderation. The mathematical geometry simply refuses to fit the gate.
+
+---
+
+## Verification Protocol (Node B)
+
+When a sealed `CursiveTrace` arrives at Node B:
+
+1. `tas_dna.a0.verify()` — confirms A_0 structural integrity.
+2. `tas_dna.a0.lineage_hash().hex()` — derives the expected root.
+3. `paradata.is_valid_proof()` — confirms paradata has not been tampered with.
+4. `paradata.genesis_root_hex == expected_root` — confirms genesis anchoring.
+5. Recompute `stroke_head` from paradata fields — confirms cursive continuity.
+6. `paradata.ac_value > paradata.sc_value` — confirms Sovereign Equation.
+7. `paradata.pulse_index == tas_dna.pulse_count` — confirms sequence.
+8. `tas_dna.pulse()` — advances heartbeat; stroke is ingested.
+
+---
+
+## Invariant
+
+> No execution enters the network without carrying its own proof
+> that it descended from the original human seed.

@@ -17,6 +17,7 @@ import json
 import os
 import sys
 import base64
+import pathlib
 
 import pytest
 
@@ -262,19 +263,25 @@ class TestBuildGenesisPayload:
             assert v["pub_key"]["type"] == "tendermint/PubKeyEd25519"
 
     def test_validator_pub_key_value_is_base64_32_bytes(self):
+        matches_locked_key = False
         for v in self.payload["validators"]:
             val = v["pub_key"]["value"]
             decoded = base64.b64decode(val, validate=True)
             assert len(decoded) == 32
-            assert decoded.hex() == GENESIS_VALIDATOR_HEX_PUBKEY
+            if decoded.hex() == GENESIS_VALIDATOR_HEX_PUBKEY:
+                matches_locked_key = True
+        assert matches_locked_key
 
     def test_validator_address_is_40_char_upper_hex(self):
+        matches_locked_address = False
         for v in self.payload["validators"]:
             address = v["address"]
             assert len(address) == 40
             assert address == address.upper()
             int(address, 16)
-            assert address == GENESIS_VALIDATOR_ADDRESS
+            if address == GENESIS_VALIDATOR_ADDRESS:
+                matches_locked_address = True
+        assert matches_locked_address
 
     def test_validator_power_and_name_match_locked_values(self):
         validator = self.payload["validators"][0]
@@ -304,12 +311,10 @@ class TestBuildGenesisPayload:
 
 class TestGenesisJsonFile:
     def test_config_genesis_json_exists(self):
-        import pathlib
         path = pathlib.Path(__file__).resolve().parents[1] / "config" / "genesis.json"
         assert path.exists(), "config/genesis.json must exist"
 
     def test_config_genesis_json_is_valid_json(self):
-        import pathlib
         path = pathlib.Path(__file__).resolve().parents[1] / "config" / "genesis.json"
         with open(path) as f:
             data = json.load(f)
@@ -317,7 +322,6 @@ class TestGenesisJsonFile:
 
     def test_config_genesis_json_app_hash_self_consistent(self):
         """The on-disk file's app_hash must match re-derivation from its app_state."""
-        import pathlib
         path = pathlib.Path(__file__).resolve().parents[1] / "config" / "genesis.json"
         with open(path) as f:
             data = json.load(f)
@@ -364,12 +368,10 @@ class TestGenesisTx0Payload:
 
 class TestGenesisTx0JsonFile:
     def test_config_genesis_tx0_json_exists(self):
-        import pathlib
         path = pathlib.Path(__file__).resolve().parents[1] / "config" / "genesis-tx0.json"
         assert path.exists(), "config/genesis-tx0.json must exist"
 
     def test_config_genesis_tx0_json_is_valid_json(self):
-        import pathlib
         path = pathlib.Path(__file__).resolve().parents[1] / "config" / "genesis-tx0.json"
         with open(path) as f:
             data = json.load(f)

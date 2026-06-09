@@ -86,7 +86,11 @@ def derive_validator_pubkey(index: int) -> str:
 
 
 def derive_validator_address(pubkey_hex: str) -> str:
-    """Return CometBFT ed25519 validator address (upper-case 20-byte hex)."""
+    """Return CometBFT ed25519 validator address (uppercase 20-byte hex).
+
+    CometBFT/Tendermint validator addresses are SHA-256(pubkey_bytes) truncated
+    to the first 20 bytes, then encoded as uppercase hexadecimal.
+    """
     pubkey_bytes = bytes.fromhex(pubkey_hex)
     return _sha256(pubkey_bytes)[:20].hex().upper()
 
@@ -95,7 +99,7 @@ def derive_app_hash(app_state: Dict[str, Any]) -> str:
     """Compute the deterministic app_hash over the canonical genesis app_state.
 
     The app_hash is SHA-256 of the canonical (sorted-keys, compact) JSON of
-    *app_state*, returned as a 64-character upper-case hex string matching the
+    *app_state*, returned as a 64-character uppercase hex string matching the
     Tendermint / CometBFT convention.
     """
     return _sha256(_canonical_json(app_state)).hex().upper()

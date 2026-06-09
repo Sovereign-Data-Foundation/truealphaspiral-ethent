@@ -63,12 +63,12 @@
       "bytecode_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
   },
-  "seed_validators": [
+  "validators": [
     {
-      "address": "tas_val_genesis_0",
+      "address": "3ECF6B805E473868D726BBD239A6C45584B8028E",
       "pub_key": {
-        "type": "ed25519",
-        "value": "c25e2bd926a6b06549d82685f8f94d0e9549b0de320d86928844e7c0baa4663f"
+        "type": "tendermint/PubKeyEd25519",
+        "value": "wl4r2SamsGVJ2CaF+PlNDpVJsN4yDYaSiETnwLqkZj8="
       },
       "power": "100",
       "name": "TAS_Prime_Node"

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import base64
 from typing import Any, Dict
 
 
@@ -47,6 +48,10 @@ def _sha256(data: bytes) -> bytes:
 
 def _canonical_json(obj: Any) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _hex_to_base64(hex_value: str) -> str:
+    return base64.b64encode(bytes.fromhex(hex_value)).decode("ascii")
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +75,12 @@ def derive_validator_pubkey(index: int) -> str:
     """
     root = A_0.lineage_hash()
     return _sha256(root + b"tas_validator_pubkey" + index.to_bytes(1, "big")).hex()
+
+
+def derive_validator_address(pubkey_hex: str) -> str:
+    """Return CometBFT ed25519 validator address (upper-case 20-byte hex)."""
+    pubkey_bytes = bytes.fromhex(pubkey_hex)
+    return _sha256(pubkey_bytes)[:20].hex().upper()
 
 
 def derive_app_hash(app_state: Dict[str, Any]) -> str:
@@ -103,7 +114,9 @@ def build_genesis_payload() -> Dict[str, Any]:
     """
     node0_pk = derive_node_pubkey(0)
     node1_pk = derive_node_pubkey(1)
-    val0_pk  = derive_validator_pubkey(0)
+    val0_pk = derive_validator_pubkey(0)
+    val0_pk_b64 = _hex_to_base64(val0_pk)
+    val0_addr = derive_validator_address(val0_pk)
 
     app_state: Dict[str, Any] = {
         "accounts": [
@@ -178,12 +191,12 @@ def build_genesis_payload() -> Dict[str, Any]:
 
         "app_state": app_state,
 
-        "seed_validators": [
+        "validators": [
             {
-                "address": "tas_val_genesis_0",
+                "address": val0_addr,
                 "pub_key": {
-                    "type": "ed25519",
-                    "value": val0_pk,
+                    "type": "tendermint/PubKeyEd25519",
+                    "value": val0_pk_b64,
                 },
                 "power": "100",
                 "name": "TAS_Prime_Node",

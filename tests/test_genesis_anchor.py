@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import sys
+import base64
 
 import pytest
 
@@ -24,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from genesis_anchor import (
     derive_node_pubkey,
     derive_validator_pubkey,
+    derive_validator_address,
     derive_app_hash,
     build_genesis_payload,
 )
@@ -87,6 +89,15 @@ class TestDeriveValidatorPubkey:
         assert derive_validator_pubkey(0) == expected
 
 
+class TestDeriveValidatorAddress:
+    def test_returns_40_char_upper_hex(self):
+        pk = derive_validator_pubkey(0)
+        address = derive_validator_address(pk)
+        assert len(address) == 40
+        assert address == address.upper()
+        int(address, 16)
+
+
 # ---------------------------------------------------------------------------
 # app_hash derivation tests
 # ---------------------------------------------------------------------------
@@ -128,7 +139,7 @@ class TestBuildGenesisPayload:
     def test_top_level_keys_present(self):
         required = {
             "chain_id", "genesis_time", "initial_height", "app_hash",
-            "consensus_params", "tas_codex_rules", "app_state", "seed_validators",
+            "consensus_params", "tas_codex_rules", "app_state", "validators",
         }
         assert required.issubset(self.payload.keys())
 
@@ -229,19 +240,26 @@ class TestBuildGenesisPayload:
         gov = self.payload["app_state"]["governance"]
         assert len(gov["authorized_amendment_addresses"]) >= 1
 
-    # seed_validators
-    def test_seed_validators_non_empty(self):
-        assert len(self.payload["seed_validators"]) >= 1
+    # validators
+    def test_validators_non_empty(self):
+        assert len(self.payload["validators"]) >= 1
 
     def test_validator_pub_key_type_ed25519(self):
-        for v in self.payload["seed_validators"]:
-            assert v["pub_key"]["type"] == "ed25519"
+        for v in self.payload["validators"]:
+            assert v["pub_key"]["type"] == "tendermint/PubKeyEd25519"
 
-    def test_validator_pub_key_value_is_64_char_hex(self):
-        for v in self.payload["seed_validators"]:
+    def test_validator_pub_key_value_is_base64_32_bytes(self):
+        for v in self.payload["validators"]:
             val = v["pub_key"]["value"]
-            assert len(val) == 64
-            int(val, 16)
+            decoded = base64.b64decode(val, validate=True)
+            assert len(decoded) == 32
+
+    def test_validator_address_is_40_char_upper_hex(self):
+        for v in self.payload["validators"]:
+            address = v["address"]
+            assert len(address) == 40
+            assert address == address.upper()
+            int(address, 16)
 
     # Determinism
     def test_payload_is_deterministic(self):

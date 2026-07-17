@@ -1,104 +1,46 @@
-"""Authenticated, fail-closed admission decisions.
+"""Authenticated, context-bound, fail-closed admission decisions.
 
-This module deliberately separates parsing, authority resolution, signature
-verification, evidence recording, and later state transitions.  It is an
-adapter boundary: private keys are only available to ``ReceiptSigner`` and are
-never reconstructed from public authority material.
+The gate resolves semantic context before candidate interpretation, then binds
+that exact context to an immutable authority checkpoint. Private keys remain
+behind ``ReceiptSigner`` and are never reconstructed from public material.
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
-import json
-import math
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Mapping, Protocol
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-from cryptography.hazmat.primitives.serialization import (
-    Encoding,
-    PublicFormat,
-    load_der_public_key,
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+from context_snapshot import (
+    CANONICALIZATION_VERSION,
+    CanonicalJSONError,
+    ContextResolver,
+    ContextSnapshot,
+    ContextValidationError,
+    DefinitionResolver,
+    canonical_hash,
+    canonical_json,
+    domain_hash,
+    parse_canonical_json,
+    resolve_verified_context,
 )
 
-
 AUTHORIZATION_DOMAIN = b"TAS-AUTHORITY-GATE-V1\x00"
+AUTHORITY_BINDING_DOMAIN = b"TAS-AUTHORITY-BINDING-V1\x00"
 RECEIPT_DOMAIN = b"TAS-ADMISSION-RECEIPT-V1\x00"
-CANONICALIZATION_VERSION = "TAS-CJSON-1"
-RULE_SET_VERSION = "TAS-PI-GATE-1"
+RULE_SET_VERSION = "TAS-PI-GATE-2"
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
-_SECP256K1_ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
-
-
-class CanonicalJSONError(ValueError):
-    """Raised when input is not part of the constrained TAS-CJSON-1 subset."""
-
-
-def _reject_duplicates(pairs: Sequence[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise CanonicalJSONError(f"duplicate JSON key: {key!r}")
-        result[key] = value
-    return result
-
-
-def parse_canonical_json(raw: bytes, *, max_bytes: int = 65536, max_depth: int = 32,
-                         max_nodes: int = 4096) -> Any:
-    """Decode untrusted UTF-8 JSON after rejecting ambiguous/non-portable forms."""
-    if not isinstance(raw, bytes) or len(raw) > max_bytes:
-        raise CanonicalJSONError("JSON input exceeds byte limit")
-    try:
-        value = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicates,
-                           parse_constant=lambda value: (_ for _ in ()).throw(
-                               CanonicalJSONError(f"invalid JSON constant: {value}")))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise CanonicalJSONError("invalid UTF-8 JSON") from error
-
-    nodes = 0
-    def validate(item: Any, depth: int = 0) -> None:
-        nonlocal nodes
-        nodes += 1
-        if nodes > max_nodes or depth > max_depth:
-            raise CanonicalJSONError("JSON structural limit exceeded")
-        if isinstance(item, float):
-            if not math.isfinite(item) or item == 0.0 or item != int(item):
-                raise CanonicalJSONError("TAS-CJSON-1 does not permit floating point values")
-        elif isinstance(item, int) and not -(2**53 - 1) <= item <= 2**53 - 1:
-            raise CanonicalJSONError("integer outside TAS-CJSON-1 range")
-        elif isinstance(item, str):
-            if any(0xD800 <= ord(character) <= 0xDFFF for character in item):
-                raise CanonicalJSONError("Unicode surrogate not permitted")
-        elif isinstance(item, Mapping):
-            for key, child in item.items():
-                if not isinstance(key, str):
-                    raise CanonicalJSONError("JSON object key is not a string")
-                validate(key, depth + 1)
-                validate(child, depth + 1)
-        elif isinstance(item, list):
-            for child in item:
-                validate(child, depth + 1)
-    validate(value)
-    return value
-
-
-def canonical_json(value: Any) -> bytes:
-    """Serialize validated TAS-CJSON-1 data as deterministic UTF-8 bytes."""
-    # Round trip through the validator to apply the same limits/types to local data.
-    provisional = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True,
-                             allow_nan=False).encode("utf-8")
-    parse_canonical_json(provisional)
-    return provisional
-
-
-def canonical_hash(value: Any) -> str:
-    return hashlib.sha256(canonical_json(value)).hexdigest()
+_SECP256K1_ORDER = (
+    0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+)
 
 
 @dataclass(frozen=True)
@@ -111,40 +53,83 @@ class AuthoritySnapshot:
     scope_policy_hash: str
     checkpoint_hash: str
     valid_until: str
+    context_snapshot_hash: str | None = None
+
+
+def authority_binding_hash(snapshot: AuthoritySnapshot) -> str:
+    """Hash the non-circular authority projection committed by a context.
+
+    ``context_snapshot_hash`` is excluded: the context commits to this
+    projection while the full AuthoritySnapshot separately commits back to the
+    context hash. This creates mutual binding without a hash cycle.
+    """
+    body = {
+        "credential_id": snapshot.credential_id,
+        "algorithm": snapshot.algorithm,
+        "public_key": base64.b64encode(snapshot.public_key).decode(),
+        "authority_epoch": snapshot.authority_epoch,
+        "revoked": snapshot.revoked,
+        "scope_policy_hash": snapshot.scope_policy_hash,
+        "checkpoint_hash": snapshot.checkpoint_hash,
+        "valid_until": snapshot.valid_until,
+    }
+    return domain_hash(AUTHORITY_BINDING_DOMAIN, body)
 
 
 class AuthorityResolver(Protocol):
-    def resolve(self, *, credential_id: str, checkpoint_hash: str) -> AuthoritySnapshot | None: ...
+    def resolve(
+        self, *, credential_id: str, checkpoint_hash: str
+    ) -> AuthoritySnapshot | None: ...
 
 
 class SignatureVerifier(Protocol):
-    def verify_signature(self, *, algorithm: str, public_key: bytes, message: bytes,
-                         signature: bytes) -> bool: ...
+    def verify_signature(
+        self,
+        *,
+        algorithm: str,
+        public_key: bytes,
+        message: bytes,
+        signature: bytes,
+    ) -> bool: ...
 
 
 class ReceiptSigner(Protocol):
     @property
     def algorithm(self) -> str: ...
+
     @property
     def public_key(self) -> bytes: ...
+
     def sign(self, message: bytes) -> bytes: ...
 
 
 class DecisionLedger(Protocol):
-    def append_decision(self, receipt_hash: str, receipt: Mapping[str, Any]) -> None: ...
+    def append_decision(
+        self, receipt_hash: str, receipt: Mapping[str, Any]
+    ) -> None: ...
+
     def get_receipt(self, receipt_hash: str) -> Mapping[str, Any] | None: ...
 
 
 class Secp256k1Verifier:
-    """DER ECDSA/SHA-256 verifier for compressed SEC1 public keys and low-S signatures."""
+    """DER ECDSA/SHA-256 verifier for compressed SEC1 keys and low-S signatures."""
+
     algorithm = "ECDSA-secp256k1-SHA256-DER-lowS"
 
-    def verify_signature(self, *, algorithm: str, public_key: bytes, message: bytes,
-                         signature: bytes) -> bool:
+    def verify_signature(
+        self,
+        *,
+        algorithm: str,
+        public_key: bytes,
+        message: bytes,
+        signature: bytes,
+    ) -> bool:
         if algorithm != self.algorithm or len(public_key) != 33:
             return False
         try:
-            key = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), public_key)
+            key = ec.EllipticCurvePublicKey.from_encoded_point(
+                ec.SECP256K1(), public_key
+            )
             _r, s = decode_dss_signature(signature)
             if not 0 < s <= _SECP256K1_ORDER // 2:
                 return False
@@ -156,43 +141,61 @@ class Secp256k1Verifier:
 
 class LocalSecp256k1Signer:
     """Private-key-backed signer suitable for a KMS/HSM adapter replacement."""
+
     algorithm = Secp256k1Verifier.algorithm
+
     def __init__(self, private_key: ec.EllipticCurvePrivateKey) -> None:
         if not isinstance(private_key.curve, ec.SECP256K1):
             raise ValueError("receipt signer requires a secp256k1 private key")
         self._private_key = private_key
+
     @property
     def public_key(self) -> bytes:
-        return self._private_key.public_key().public_bytes(Encoding.X962, PublicFormat.CompressedPoint)
+        return self._private_key.public_key().public_bytes(
+            Encoding.X962, PublicFormat.CompressedPoint
+        )
+
     def sign(self, message: bytes) -> bytes:
-        r, s = decode_dss_signature(self._private_key.sign(message, ec.ECDSA(hashes.SHA256())))
-        # cryptography emits DER; normalize the mathematically equivalent high-S form.
-        from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+        r, s = decode_dss_signature(
+            self._private_key.sign(message, ec.ECDSA(hashes.SHA256()))
+        )
+        from cryptography.hazmat.primitives.asymmetric.utils import (
+            encode_dss_signature,
+        )
+
         return encode_dss_signature(r, min(s, _SECP256K1_ORDER - s))
 
 
 class InMemoryDecisionLedger:
-    """Test/development append-only reader; production implementations must be durable."""
+    """Test/development append-only reader; production stores must be durable."""
+
     def __init__(self) -> None:
         self._records: dict[str, Mapping[str, Any]] = {}
-    def append_decision(self, receipt_hash: str, receipt: Mapping[str, Any]) -> None:
+
+    def append_decision(
+        self, receipt_hash: str, receipt: Mapping[str, Any]
+    ) -> None:
         if receipt_hash in self._records:
             raise ValueError("receipt hash already recorded")
         self._records[receipt_hash] = dict(receipt)
+
     def get_receipt(self, receipt_hash: str) -> Mapping[str, Any] | None:
         receipt = self._records.get(receipt_hash)
         return dict(receipt) if receipt else None
 
 
 class AuthenticatedLineageVerifier:
-    """Verify bounded, signed receipt ancestry from a ledger reader.
+    """Verify bounded, signed receipt ancestry from a ledger reader."""
 
-    The store is intentionally a read-only protocol boundary.  Production
-    deployments should back it with an append-only service rather than the
-    in-memory implementation above.
-    """
-    def __init__(self, store: DecisionLedger, verifier: SignatureVerifier, max_depth: int = 128) -> None:
-        self._store, self._verifier, self._max_depth = store, verifier, max_depth
+    def __init__(
+        self,
+        store: DecisionLedger,
+        verifier: SignatureVerifier,
+        max_depth: int = 128,
+    ) -> None:
+        self._store = store
+        self._verifier = verifier
+        self._max_depth = max_depth
 
     def verify(self, receipt_hash: str) -> bool:
         seen: set[str] = set()
@@ -203,9 +206,16 @@ class AuthenticatedLineageVerifier:
                 return False
             seen.add(current_hash)
             receipt = self._store.get_receipt(current_hash)
-            if receipt is None or canonical_hash(receipt) != current_hash or not self._valid_signature(receipt):
+            if (
+                receipt is None
+                or canonical_hash(receipt) != current_hash
+                or not self._valid_signature(receipt)
+            ):
                 return False
-            if child is not None and child.get("sequence") != receipt.get("sequence", -1) + 1:
+            if (
+                child is not None
+                and child.get("sequence") != receipt.get("sequence", -1) + 1
+            ):
                 return False
             parent = receipt.get("parent_receipt_hash")
             if parent is None:
@@ -218,76 +228,244 @@ class AuthenticatedLineageVerifier:
     def _valid_signature(self, receipt: Mapping[str, Any]) -> bool:
         try:
             signature = base64.b64decode(receipt["signature"], validate=True)
-            public_key = base64.b64decode(receipt["gatekeeper_public_key"], validate=True)
-            body = {key: value for key, value in receipt.items()
-                    if key not in {"signature", "signature_algorithm", "gatekeeper_public_key"}}
-            return self._verifier.verify_signature(algorithm=receipt["signature_algorithm"], public_key=public_key,
-                                                   message=RECEIPT_DOMAIN + canonical_json(body), signature=signature)
+            public_key = base64.b64decode(
+                receipt["gatekeeper_public_key"], validate=True
+            )
+            body = {
+                key: value
+                for key, value in receipt.items()
+                if key
+                not in {
+                    "signature",
+                    "signature_algorithm",
+                    "gatekeeper_public_key",
+                }
+            }
+            return self._verifier.verify_signature(
+                algorithm=receipt["signature_algorithm"],
+                public_key=public_key,
+                message=RECEIPT_DOMAIN + canonical_json(body),
+                signature=signature,
+            )
         except (KeyError, TypeError, ValueError, CanonicalJSONError):
             return False
 
 
 class AdmissionGatekeeper:
-    """Parse raw requests, bind one authority checkpoint, sign and append decisions."""
-    _FIELDS = frozenset({"schema_version", "canonicalization_version", "domain_separator",
-                         "credential_id", "authority_checkpoint_hash", "authority_epoch",
-                         "signature_algorithm", "requested_operation", "candidate_hash",
-                         "parent_receipt_hash", "nonce", "signature"})
-    def __init__(self, *, gatekeeper_id: str, authority_resolver: AuthorityResolver,
-                 verifier: SignatureVerifier, receipt_signer: ReceiptSigner,
-                 ledger: DecisionLedger) -> None:
-        self.gatekeeper_id, self.authority_resolver = gatekeeper_id, authority_resolver
-        self.verifier, self.receipt_signer, self.ledger = verifier, receipt_signer, ledger
+    """Resolve context first, then authenticate, interpret, sign, and append."""
 
-    def evaluate(self, *, raw_candidate: bytes, raw_envelope: bytes, current_time: str) -> dict[str, Any]:
-        """Return only a signed-and-appended decision, otherwise a fail-closed CUTOFF."""
+    _FIELDS = frozenset(
+        {
+            "schema_version",
+            "canonicalization_version",
+            "domain_separator",
+            "credential_id",
+            "authority_checkpoint_hash",
+            "authority_epoch",
+            "context_snapshot_hash",
+            "signature_algorithm",
+            "requested_operation",
+            "candidate_hash",
+            "parent_receipt_hash",
+            "nonce",
+            "signature",
+        }
+    )
+
+    def __init__(
+        self,
+        *,
+        gatekeeper_id: str,
+        authority_resolver: AuthorityResolver,
+        context_resolver: ContextResolver,
+        definition_resolver: DefinitionResolver,
+        verifier: SignatureVerifier,
+        receipt_signer: ReceiptSigner,
+        ledger: DecisionLedger,
+    ) -> None:
+        self.gatekeeper_id = gatekeeper_id
+        self.authority_resolver = authority_resolver
+        self.context_resolver = context_resolver
+        self.definition_resolver = definition_resolver
+        self.verifier = verifier
+        self.receipt_signer = receipt_signer
+        self.ledger = ledger
+
+    def evaluate(
+        self, *, raw_candidate: bytes, raw_envelope: bytes, current_time: str
+    ) -> dict[str, Any]:
+        """Return only a signed-and-appended decision, otherwise fail closed."""
+        envelope: Mapping[str, Any] = {}
+        snapshot: AuthoritySnapshot | None = None
+        context: ContextSnapshot | None = None
+        candidate: Any = None
+        admitted = False
+        failure: str | None = None
+        raw_candidate_hash = (
+            hashlib.sha256(raw_candidate).hexdigest()
+            if isinstance(raw_candidate, bytes)
+            else None
+        )
+
         try:
-            candidate, envelope = parse_canonical_json(raw_candidate), parse_canonical_json(raw_envelope)
-            if not isinstance(envelope, dict) or set(envelope) != self._FIELDS:
-                raise ValueError("invalid envelope field set")
-            if envelope["schema_version"] != 1 or envelope["canonicalization_version"] != CANONICALIZATION_VERSION:
-                raise ValueError("unsupported envelope version")
-            if envelope["domain_separator"] != "TAS_AUTHORITY_GATE_V1":
-                raise ValueError("invalid authorization domain")
-            if not all(isinstance(envelope[field], str) and envelope[field] for field in
-                       ("credential_id", "signature_algorithm", "requested_operation", "signature", "nonce")):
-                raise ValueError("invalid string envelope field")
-            if (not isinstance(envelope["authority_epoch"], int) or isinstance(envelope["authority_epoch"], bool)
-                    or not _HEX_64.fullmatch(envelope["authority_checkpoint_hash"])
-                    or not _HEX_64.fullmatch(envelope["candidate_hash"])
-                    or (envelope["parent_receipt_hash"] is not None
-                        and (not isinstance(envelope["parent_receipt_hash"], str)
-                             or not _HEX_64.fullmatch(envelope["parent_receipt_hash"])))):
-                raise ValueError("invalid envelope identifier field")
-            if not isinstance(envelope["nonce"], str) or not envelope["nonce"]:
-                raise ValueError("invalid nonce")
-            if envelope["candidate_hash"] != canonical_hash(candidate):
-                raise ValueError("candidate binding mismatch")
-            snapshot = self.authority_resolver.resolve(
-                credential_id=envelope["credential_id"], checkpoint_hash=envelope["authority_checkpoint_hash"])
-            admitted = self._authorized(envelope, snapshot, current_time)
-            failure = None if admitted else "AUTHORIZATION_REFUSED"
-        except Exception as error:
-            envelope, snapshot, admitted, failure = {}, None, False, f"INVALID_INPUT:{type(error).__name__}"
-            candidate = None
-        return self._record(envelope, snapshot, candidate, current_time, admitted, failure)
+            envelope = parse_canonical_json(raw_envelope)
+            self._validate_envelope(envelope)
 
-    def _authorized(self, envelope: Mapping[str, Any], snapshot: AuthoritySnapshot | None,
-                    current_time: str) -> bool:
-        if snapshot is None or snapshot.revoked or envelope["authority_epoch"] != snapshot.authority_epoch:
+            # No candidate semantics are interpreted before context verification.
+            context = resolve_verified_context(
+                context_snapshot_hash=envelope["context_snapshot_hash"],
+                context_resolver=self.context_resolver,
+                definition_resolver=self.definition_resolver,
+            )
+
+            snapshot = self.authority_resolver.resolve(
+                credential_id=envelope["credential_id"],
+                checkpoint_hash=envelope["authority_checkpoint_hash"],
+            )
+            if not self._context_authority_valid(envelope, context, snapshot):
+                failure = "CONTEXT_AUTHORITY_MISMATCH"
+            elif not self._context_lineage_valid(envelope, context):
+                failure = "CONTEXT_LINEAGE_REFUSED"
+            else:
+                candidate = parse_canonical_json(raw_candidate)
+                if envelope["candidate_hash"] != canonical_hash(candidate):
+                    raise ValueError("candidate binding mismatch")
+                admitted = self._authorized(envelope, snapshot, current_time)
+                failure = None if admitted else "AUTHORIZATION_REFUSED"
+        except ContextValidationError:
+            failure = "CONTEXT_REFUSED"
+        except Exception as error:
+            failure = f"INVALID_INPUT:{type(error).__name__}"
+
+        return self._record(
+            envelope=envelope,
+            snapshot=snapshot,
+            context=context,
+            candidate=candidate,
+            raw_candidate_hash=raw_candidate_hash,
+            current_time=current_time,
+            admitted=admitted,
+            failure=failure,
+        )
+
+    def _validate_envelope(self, envelope: Any) -> None:
+        if not isinstance(envelope, dict) or set(envelope) != self._FIELDS:
+            raise ValueError("invalid envelope field set")
+        if (
+            envelope["schema_version"] != 2
+            or envelope["canonicalization_version"]
+            != CANONICALIZATION_VERSION
+        ):
+            raise ValueError("unsupported envelope version")
+        if envelope["domain_separator"] != "TAS_AUTHORITY_GATE_V1":
+            raise ValueError("invalid authorization domain")
+        string_fields = (
+            "credential_id",
+            "signature_algorithm",
+            "requested_operation",
+            "signature",
+            "nonce",
+        )
+        if not all(
+            isinstance(envelope[field], str) and envelope[field]
+            for field in string_fields
+        ):
+            raise ValueError("invalid string envelope field")
+        if (
+            not isinstance(envelope["authority_epoch"], int)
+            or isinstance(envelope["authority_epoch"], bool)
+            or not _HEX_64.fullmatch(envelope["authority_checkpoint_hash"])
+            or not _HEX_64.fullmatch(envelope["context_snapshot_hash"])
+            or not _HEX_64.fullmatch(envelope["candidate_hash"])
+            or (
+                envelope["parent_receipt_hash"] is not None
+                and (
+                    not isinstance(envelope["parent_receipt_hash"], str)
+                    or not _HEX_64.fullmatch(envelope["parent_receipt_hash"])
+                )
+            )
+        ):
+            raise ValueError("invalid envelope identifier field")
+
+    def _context_authority_valid(
+        self,
+        envelope: Mapping[str, Any],
+        context: ContextSnapshot,
+        snapshot: AuthoritySnapshot | None,
+    ) -> bool:
+        if snapshot is None:
             return False
-        if envelope["signature_algorithm"] != snapshot.algorithm or current_time > snapshot.valid_until:
+        return (
+            snapshot.context_snapshot_hash == context.context_snapshot_hash
+            and snapshot.context_snapshot_hash
+            == envelope["context_snapshot_hash"]
+            and snapshot.checkpoint_hash
+            == envelope["authority_checkpoint_hash"]
+            and snapshot.authority_epoch == context.effective_epoch
+            and context.authority_binding_hash
+            == authority_binding_hash(snapshot)
+        )
+
+    def _context_lineage_valid(
+        self, envelope: Mapping[str, Any], context: ContextSnapshot
+    ) -> bool:
+        parent_hash = envelope["parent_receipt_hash"]
+        if parent_hash is None:
+            return True
+        parent = self.ledger.get_receipt(parent_hash)
+        if parent is None:
+            return False
+        parent_context_hash = parent.get("context_snapshot_hash")
+        return parent_context_hash in {
+            context.context_snapshot_hash,
+            context.parent_context_hash,
+        }
+
+    def _authorized(
+        self,
+        envelope: Mapping[str, Any],
+        snapshot: AuthoritySnapshot | None,
+        current_time: str,
+    ) -> bool:
+        if (
+            snapshot is None
+            or snapshot.revoked
+            or envelope["authority_epoch"] != snapshot.authority_epoch
+        ):
+            return False
+        if (
+            envelope["signature_algorithm"] != snapshot.algorithm
+            or current_time > snapshot.valid_until
+        ):
             return False
         try:
             signature = base64.b64decode(envelope["signature"], validate=True)
         except (ValueError, TypeError):
             return False
-        body = {key: value for key, value in envelope.items() if key != "signature"}
-        return self.verifier.verify_signature(algorithm=snapshot.algorithm, public_key=snapshot.public_key,
-                                              message=AUTHORIZATION_DOMAIN + canonical_json(body), signature=signature)
+        body = {
+            key: value
+            for key, value in envelope.items()
+            if key != "signature"
+        }
+        return self.verifier.verify_signature(
+            algorithm=snapshot.algorithm,
+            public_key=snapshot.public_key,
+            message=AUTHORIZATION_DOMAIN + canonical_json(body),
+            signature=signature,
+        )
 
-    def _record(self, envelope: Mapping[str, Any], snapshot: AuthoritySnapshot | None, candidate: Any,
-                current_time: str, admitted: bool, failure: str | None) -> dict[str, Any]:
+    def _record(
+        self,
+        *,
+        envelope: Mapping[str, Any],
+        snapshot: AuthoritySnapshot | None,
+        context: ContextSnapshot | None,
+        candidate: Any,
+        raw_candidate_hash: str | None,
+        current_time: str,
+        admitted: bool,
+        failure: str | None,
+    ) -> dict[str, Any]:
         parent_hash = envelope.get("parent_receipt_hash")
         try:
             if parent_hash is None:
@@ -298,29 +476,85 @@ class AdmissionGatekeeper:
                     raise ValueError("unknown lineage parent")
                 sequence = parent["sequence"] + 1
         except Exception:
-            return {"resulting_state": "CUTOFF", "failure_code": "LINEAGE_UNAVAILABLE", "durable_receipt": False}
-        body = {"schema_version": 1, "canonicalization_version": CANONICALIZATION_VERSION,
-                "rule_set_version": RULE_SET_VERSION, "gatekeeper_id": self.gatekeeper_id,
-                "event_type": "ADMISSION_DECISION", "evaluated_at": current_time, "sequence": sequence,
-                "decision_id": hashlib.sha256((str(envelope.get("nonce")) + str(envelope.get("candidate_hash")) + current_time).encode()).hexdigest(),
-                "resulting_state": "ADMITTED" if admitted else "REFUSED",
-                "credential_id": envelope.get("credential_id"),
-                "authority_epoch": snapshot.authority_epoch if snapshot else None,
-                "authority_checkpoint_hash": snapshot.checkpoint_hash if snapshot else None,
-                "candidate_hash": canonical_hash(candidate) if candidate is not None else None,
-                "authorization_envelope_hash": canonical_hash(envelope) if envelope else None,
-                "requested_operation": envelope.get("requested_operation"),
-                "parent_receipt_hash": envelope.get("parent_receipt_hash"), "nonce": envelope.get("nonce"),
-                "failure_code": failure}
+            return {
+                "resulting_state": "CUTOFF",
+                "failure_code": "LINEAGE_UNAVAILABLE",
+                "durable_receipt": False,
+            }
+
+        decision_material = {
+            "nonce": envelope.get("nonce"),
+            "declared_candidate_hash": envelope.get("candidate_hash"),
+            "context_snapshot_hash": envelope.get("context_snapshot_hash"),
+            "evaluated_at": current_time,
+        }
+        body = {
+            "schema_version": 2,
+            "canonicalization_version": CANONICALIZATION_VERSION,
+            "rule_set_version": RULE_SET_VERSION,
+            "gatekeeper_id": self.gatekeeper_id,
+            "event_type": "ADMISSION_DECISION",
+            "evaluated_at": current_time,
+            "sequence": sequence,
+            "decision_id": canonical_hash(decision_material),
+            "resulting_state": "ADMITTED" if admitted else "REFUSED",
+            "credential_id": envelope.get("credential_id"),
+            "authority_epoch": (
+                snapshot.authority_epoch if snapshot else None
+            ),
+            "authority_checkpoint_hash": (
+                snapshot.checkpoint_hash if snapshot else None
+            ),
+            "context_snapshot_hash": (
+                context.context_snapshot_hash
+                if context is not None
+                else envelope.get("context_snapshot_hash")
+            ),
+            "context_parent_hash": (
+                context.parent_context_hash if context else None
+            ),
+            "namespace_id": context.namespace_id if context else None,
+            "registry_root": context.registry_root if context else None,
+            "invariant_set_id": context.invariant_set_id if context else None,
+            "authority_binding_hash": (
+                context.authority_binding_hash if context else None
+            ),
+            "candidate_hash": (
+                canonical_hash(candidate) if candidate is not None else None
+            ),
+            "declared_candidate_hash": envelope.get("candidate_hash"),
+            "candidate_bytes_hash": raw_candidate_hash,
+            "authorization_envelope_hash": (
+                canonical_hash(envelope) if envelope else None
+            ),
+            "requested_operation": envelope.get("requested_operation"),
+            "parent_receipt_hash": parent_hash,
+            "nonce": envelope.get("nonce"),
+            "failure_code": failure,
+        }
         try:
-            signature = self.receipt_signer.sign(RECEIPT_DOMAIN + canonical_json(body))
-            receipt = {**body, "signature_algorithm": self.receipt_signer.algorithm,
-                       "gatekeeper_public_key": base64.b64encode(self.receipt_signer.public_key).decode(),
-                       "signature": base64.b64encode(signature).decode()}
+            signature = self.receipt_signer.sign(
+                RECEIPT_DOMAIN + canonical_json(body)
+            )
+            receipt = {
+                **body,
+                "signature_algorithm": self.receipt_signer.algorithm,
+                "gatekeeper_public_key": base64.b64encode(
+                    self.receipt_signer.public_key
+                ).decode(),
+                "signature": base64.b64encode(signature).decode(),
+            }
             receipt_hash = canonical_hash(receipt)
             self.ledger.append_decision(receipt_hash, receipt)
-            return {"resulting_state": body["resulting_state"], "durable_receipt": True,
-                    "receipt_hash": receipt_hash, "receipt": receipt}
+            return {
+                "resulting_state": body["resulting_state"],
+                "durable_receipt": True,
+                "receipt_hash": receipt_hash,
+                "receipt": receipt,
+            }
         except Exception:
-            return {"resulting_state": "CUTOFF", "failure_code": "RECEIPT_PRESERVATION_UNAVAILABLE",
-                    "durable_receipt": False}
+            return {
+                "resulting_state": "CUTOFF",
+                "failure_code": "RECEIPT_PRESERVATION_UNAVAILABLE",
+                "durable_receipt": False,
+            }

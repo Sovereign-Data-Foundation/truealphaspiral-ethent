@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://truealphaspiral.org/schemas/tas.definition.v1.schema.json",
+  "title": "TAS Definition Record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "canonicalization_version",
+    "namespace_id",
+    "term",
+    "semantic_version",
+    "definition",
+    "constraints",
+    "supersedes"
+  ],
+  "properties": {
+    "schema_version": {"const": "tas.definition.v1"},
+    "canonicalization_version": {"const": "TAS-CJSON-1"},
+    "namespace_id": {"type": "string", "minLength": 1},
+    "term": {"type": "string", "minLength": 1},
+    "semantic_version": {"type": "string", "minLength": 1},
+    "definition": {"type": "string", "minLength": 1},
+    "constraints": {"type": "array"},
+    "supersedes": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      ]
+    }
+  }
+}

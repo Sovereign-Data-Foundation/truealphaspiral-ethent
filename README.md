@@ -160,6 +160,10 @@ Traceability:
 - Checklist artifact commit: `5c29a410590c9a1ea4122aa8b4889ff16a5e105f`
 - Press release: `releases/2026-05-15-press-release.md`
 
+## IOC runway
+
+The active Initial Operating Capability runway is organized in `docs/ioc-runway.md`. It maps the 2026-08-21 deployment target into verification, interface, stabilization, and milestone-execution phases with repository change metrics and explicit exit criteria.
+
 ## Repository invariants
 
 - No execution without an artifact.

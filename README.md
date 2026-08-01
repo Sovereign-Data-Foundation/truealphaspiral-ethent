@@ -160,9 +160,9 @@ Traceability:
 - Checklist artifact commit: `5c29a410590c9a1ea4122aa8b4889ff16a5e105f`
 - Press release: `releases/2026-05-15-press-release.md`
 
-## IOC runway
+## Canonical Readiness Protocol and IOC runway
 
-The active Initial Operating Capability runway is organized in `docs/ioc-runway.md`. It maps the 2026-08-21 deployment target into verification, interface, stabilization, and milestone-execution phases with repository change metrics and explicit exit criteria.
+The [Canonical Readiness Protocol and active IOC runway](docs/ioc-runway.md) distinguish the governing rules for proving readiness from the dated plan that implements them for the 2026-08-21 target. The protocol defines evidence-driven readiness gates and cryptographically bound completion receipts; readiness state is derived from the ordered receipt chain rather than manually asserted task or phase labels.
 
 ## Repository invariants
 

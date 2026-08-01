@@ -1,3 +1,4 @@
 openai>=1.0.0
 pytest>=7.0.0
+jsonschema[format]>=4.23.0
 cryptography>=42.0.0

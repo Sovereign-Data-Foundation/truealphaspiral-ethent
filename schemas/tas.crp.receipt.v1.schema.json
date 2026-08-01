@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://truealphaspiral.org/schemas/tas.crp.receipt.v1.schema.json",
+  "title": "TAS Canonical Readiness Protocol Receipt Payload v1",
+  "description": "The payload covered by a detached signature. The signature itself is deliberately not part of this object.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_id", "canonicalization", "protocol_id", "protocol_version",
+    "receipt_id", "gate", "result", "evaluated_at", "scope_digest",
+    "parent_receipt_digest", "evidence", "verifier", "authority"
+  ],
+  "properties": {
+    "schema_id": {"const": "tas.crp.receipt.v1"},
+    "canonicalization": {"const": "RFC8785"},
+    "protocol_id": {"const": "tas.crp"},
+    "protocol_version": {"$ref": "#/$defs/semver"},
+    "receipt_id": {"$ref": "#/$defs/urnUuid"},
+    "gate": {"type": "integer", "minimum": 1, "maximum": 4},
+    "result": {"enum": ["PASS", "FAIL"]},
+    "evaluated_at": {"$ref": "#/$defs/timestamp"},
+    "scope_digest": {"$ref": "#/$defs/digest"},
+    "parent_receipt_digest": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
+    },
+    "evidence": {
+      "type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}
+    },
+    "verifier": {"$ref": "#/$defs/verifier"},
+    "authority": {"$ref": "#/$defs/authority"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"gate": {"const": 1}}, "required": ["gate"]},
+      "then": {"properties": {"parent_receipt_digest": {"type": "null"}}},
+      "else": {"properties": {"parent_receipt_digest": {"$ref": "#/$defs/digest"}}}
+    }
+  ],
+  "$defs": {
+    "semver": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "urnUuid": {"type": "string", "pattern": "^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "digest"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 128},
+        "digest": {"$ref": "#/$defs/digest"},
+        "media_type": {"type": "string", "minLength": 1, "maxLength": 128},
+        "uri": {"type": "string", "format": "uri"}
+      }
+    },
+    "verifier": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "version", "implementation_digest"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "version": {"$ref": "#/$defs/semver"},
+        "implementation_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "authority": {
+      "type": "object", "additionalProperties": false,
+      "required": ["evaluator_id", "key_id", "authorization_snapshot_digest", "key_valid_from", "key_valid_until", "key_status_at_evaluation", "status_checked_at"],
+      "properties": {
+        "evaluator_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "key_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "authorization_snapshot_digest": {"$ref": "#/$defs/digest"},
+        "key_valid_from": {"$ref": "#/$defs/timestamp"},
+        "key_valid_until": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/timestamp"}]},
+        "key_status_at_evaluation": {"const": "ACTIVE"},
+        "status_checked_at": {"$ref": "#/$defs/timestamp"}
+      }
+    }
+  }
+}

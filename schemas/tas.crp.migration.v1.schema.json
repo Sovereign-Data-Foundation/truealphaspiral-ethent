@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://truealphaspiral.org/schemas/tas.crp.migration.v1.schema.json",
+  "title": "TAS Canonical Readiness Protocol Migration Payload v1",
+  "description": "A signed transition between isolated CRP semantic versions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_id", "canonicalization", "protocol_id", "migration_id",
+    "source_version", "target_version", "source_head_digest", "target_scope_digest",
+    "result", "evaluated_at", "invariant_attestations", "verifier", "authority"
+  ],
+  "properties": {
+    "schema_id": {"const": "tas.crp.migration.v1"},
+    "canonicalization": {"const": "RFC8785"},
+    "protocol_id": {"const": "tas.crp"},
+    "migration_id": {"$ref": "tas.crp.receipt.v1.schema.json#/$defs/urnUuid"},
+    "source_version": {"$ref": "tas.crp.receipt.v1.schema.json#/$defs/semver"},
+    "target_version": {"$ref": "tas.crp.receipt.v1.schema.json#/$defs/semver"},
+    "source_head_digest": {"$ref": "tas.crp.receipt.v1.schema.json#/$defs/digest"},
+    "target_scope_digest": {"$ref": "tas.crp.receipt.v1.schema.json#/$defs/digest"},
+    "result": {"enum": ["PASS", "FAIL"]},
+    "evaluated_at": {"$ref": "tas.crp.receipt.v1.schema.json#/$defs/timestamp"},
+    "invariant_attestations": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["invariant_id", "evidence_digest", "result"],
+        "properties": {
+          "invariant_id": {"type": "string", "minLength": 1, "maxLength": 256},
+          "evidence_digest": {"$ref": "tas.crp.receipt.v1.schema.json#/$defs/digest"},
+          "result": {"enum": ["PASS", "FAIL"]}
+        }
+      }
+    },
+    "verifier": {"$ref": "tas.crp.receipt.v1.schema.json#/$defs/verifier"},
+    "authority": {"$ref": "tas.crp.receipt.v1.schema.json#/$defs/authority"}
+  }
+}

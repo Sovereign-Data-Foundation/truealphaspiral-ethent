@@ -1,0 +1,30 @@
+openapi: 3.1.0
+info:
+  title: TAS Canonical Readiness Protocol Payloads
+  version: 1.0.0
+  description: Normative payload contracts. Signatures are detached and cover the RFC 8785 serialization of the payload.
+paths: {}
+components:
+  schemas:
+    CompletionReceiptPayload:
+      $ref: ./tas.crp.receipt.v1.schema.json
+    MigrationReceiptPayload:
+      $ref: ./tas.crp.migration.v1.schema.json
+    DetachedProof:
+      type: object
+      additionalProperties: false
+      required: [algorithm, key_id, payload_digest, signature]
+      properties:
+        algorithm:
+          const: Ed25519
+        key_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+        payload_digest:
+          type: string
+          pattern: '^sha256:[0-9a-f]{64}$'
+        signature:
+          type: string
+          description: Unpadded base64url Ed25519 signature over the RFC 8785 payload bytes.
+          pattern: '^[A-Za-z0-9_-]{86}$'

@@ -12,6 +12,10 @@ As of **2026-07-29**, the IOC target is **23 calendar days away**.
 - **Completion receipt:** The durable, cryptographically bound output proving that a readiness gate was evaluated against identified evidence and recording its result.
 - **Readiness state:** A result derived from valid completion receipts. It is never a manually asserted label.
 
+The normative completion and migration payload contracts, signature boundary,
+version-isolation rules, and time-separated authority decisions are specified in
+[`crp-receipt-contracts.md`](crp-receipt-contracts.md).
+
 The IOC runway is an execution instance of the Canonical Readiness Protocol. The protocol defines the required sequence, evidence, verification procedures, authorities, and receipts by which readiness is established. No task, phase, or deployment state is complete merely because it is marked complete; completion exists only when the protocol admits the required evidence and produces a valid completion receipt.
 
 ## Runway Summary

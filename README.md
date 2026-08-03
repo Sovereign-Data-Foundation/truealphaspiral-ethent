@@ -47,6 +47,26 @@ The self-test produces auditable execution records.
 - Step artifacts are serialized as JSON under `artifacts/`.
 - Artifact hashes are recorded in `ledger/artifacts.hash`.
 
+## TAS v1 receipt verifier
+
+The Rust `tas-verifier` binary validates a raw JSON envelope through the
+ordered TAS v1 stages, performs strict Ed25519 verification over the
+domain-separated canonical unsigned envelope, and emits a deterministic audit
+receipt. Build and run it with:
+
+```bash
+cargo build --release
+./target/release/tas-verifier payload.json
+```
+
+Refused payloads exit with status 1; file I/O and CLI failures exit with status
+2. A newline-delimited nonce store and full result output can be supplied when
+needed:
+
+```bash
+tas-verifier payload.json --seen-nonces nonces.txt --full-result
+```
+
 In this repository, execution is not merely performed; it is witnessed,
 serialized, hashed, and ledgered.
 

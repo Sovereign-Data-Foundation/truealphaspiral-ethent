@@ -1,0 +1,27 @@
+name: IOC Fail-Closed Runtime Verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify-fail-closed-runtime:
+    name: verify-fail-closed-runtime
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code baseline
+        uses: actions/checkout@v4
+      - name: Set up Python runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install project requirements
+        run: python -m pip install -r requirements.txt
+      - name: Execute fail-closed runtime suite
+        run: python -m pytest tests/test_sovereign_runtime.py -v --tb=short --strict-markers

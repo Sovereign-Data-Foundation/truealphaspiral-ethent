@@ -9,13 +9,19 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Protocol
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
@@ -139,6 +145,48 @@ class Secp256k1Verifier:
             return False
 
 
+class Ed25519Verifier:
+    """Strict Ed25519 verifier for production authority and receipt proofs."""
+
+    algorithm = "Ed25519"
+
+    def verify_signature(
+        self,
+        *,
+        algorithm: str,
+        public_key: bytes,
+        message: bytes,
+        signature: bytes,
+    ) -> bool:
+        if algorithm != self.algorithm or len(public_key) != 32:
+            return False
+        try:
+            Ed25519PublicKey.from_public_bytes(public_key).verify(
+                signature, message
+            )
+            return True
+        except (ValueError, InvalidSignature):
+            return False
+
+
+class LocalEd25519Signer:
+    """Local Ed25519 signer; production deployments can replace it with KMS."""
+
+    algorithm = Ed25519Verifier.algorithm
+
+    def __init__(self, private_key: Ed25519PrivateKey) -> None:
+        self._private_key = private_key
+
+    @property
+    def public_key(self) -> bytes:
+        return self._private_key.public_key().public_bytes(
+            Encoding.Raw, PublicFormat.Raw
+        )
+
+    def sign(self, message: bytes) -> bytes:
+        return self._private_key.sign(message)
+
+
 class LocalSecp256k1Signer:
     """Private-key-backed signer suitable for a KMS/HSM adapter replacement."""
 
@@ -182,6 +230,72 @@ class InMemoryDecisionLedger:
     def get_receipt(self, receipt_hash: str) -> Mapping[str, Any] | None:
         receipt = self._records.get(receipt_hash)
         return dict(receipt) if receipt else None
+
+
+class FileDecisionLedger:
+    """Append-only, crash-durable receipt store keyed by receipt hash.
+
+    Each canonical receipt is written once to a content-addressed file.  The
+    temporary file and directory are fsynced around atomic publication so a
+    returned decision remains available after process restart.
+    """
+
+    def __init__(self, directory: str | os.PathLike[str]) -> None:
+        self.directory = Path(directory)
+        self.directory.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, receipt_hash: str) -> Path:
+        if not _HEX_64.fullmatch(receipt_hash):
+            raise ValueError("invalid receipt hash")
+        return self.directory / f"{receipt_hash}.json"
+
+    def append_decision(
+        self, receipt_hash: str, receipt: Mapping[str, Any]
+    ) -> None:
+        payload = canonical_json(receipt)
+        if hashlib.sha256(payload).hexdigest() != receipt_hash:
+            raise ValueError("receipt hash does not match receipt")
+        destination = self._path(receipt_hash)
+        temporary = self.directory / f".{receipt_hash}.{os.getpid()}.tmp"
+        try:
+            descriptor = os.open(
+                temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                os.link(temporary, destination)
+            except FileExistsError as error:
+                raise ValueError("receipt hash already recorded") from error
+            temporary.unlink()
+            directory_fd = os.open(self.directory, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def get_receipt(self, receipt_hash: str) -> Mapping[str, Any] | None:
+        path = self._path(receipt_hash)
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            return None
+        try:
+            receipt = parse_canonical_json(raw)
+            valid = (
+                canonical_json(receipt) == raw
+                and isinstance(receipt, Mapping)
+                and canonical_hash(receipt) == receipt_hash
+            )
+        except CanonicalJSONError:
+            valid = False
+        if not valid:
+            return None
+        return dict(receipt)
 
 
 class AuthenticatedLineageVerifier:

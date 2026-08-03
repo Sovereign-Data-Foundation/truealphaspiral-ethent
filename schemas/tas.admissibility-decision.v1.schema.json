@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://truealphaspiral.org/schemas/tas.admissibility-decision.v1.schema.json",
+  "title": "AdmissibilityDecision",
+  "type": "object",
+  "required": ["allowed_action_tokens", "authority_pubkey", "authority_snapshot_hash", "candidate_hash", "context_snapshot_hash", "is_admitted", "nonce", "parent_receipt_hash", "refusal_reason", "timestamp_utc", "verifier_signature"],
+  "properties": {
+    "allowed_action_tokens": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "authority_pubkey": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "authority_snapshot_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "candidate_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "context_snapshot_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "is_admitted": {"type": "boolean"},
+    "nonce": {"type": "string", "minLength": 16},
+    "parent_receipt_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "refusal_reason": {"type": "string"},
+    "timestamp_utc": {"type": "string", "format": "date-time"},
+    "verifier_signature": {"type": "string", "pattern": "^[a-f0-9]{128}$"}
+  },
+  "additionalProperties": false
+}

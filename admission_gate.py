@@ -12,12 +12,8 @@ import hashlib
 import os
 import re
 from dataclasses import dataclass
-<<<<<<< HEAD
-from typing import Any, Mapping, Protocol, Tuple
-=======
 from pathlib import Path
-from typing import Any, Mapping, Protocol
->>>>>>> origin/main
+from typing import Any, Mapping, Protocol, Tuple
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes

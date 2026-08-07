@@ -164,6 +164,26 @@ Traceability:
 
 The [Canonical Readiness Protocol and active IOC runway](docs/ioc-runway.md) distinguish the governing rules for proving readiness from the dated plan that implements them for the 2026-08-21 target. The protocol defines evidence-driven readiness gates and cryptographically bound completion receipts; readiness state is derived from the ordered receipt chain rather than manually asserted task or phase labels.
 
+## Fail-closed sovereign runtime
+
+`sovereign_runtime.py` consumes a signed `AdmissibilityDecision`; it does not
+derive or expand action authority. Before executing, it verifies the Ed25519
+signature, content and lineage hashes, admission state, nonce, and the closed
+`allowed_action_tokens` tuple. Execution outside that tuple—or any invalid
+decision—produces a content-addressed refusal receipt before the runtime raises
+`RuntimeSecurityError`.
+
+Run the focused IOC gate locally with:
+
+```bash
+python -m pytest tests/test_sovereign_runtime.py -v --strict-markers
+```
+
+The same command runs on pushes and pull requests targeting `main` through the
+`verify-fail-closed-runtime` GitHub Actions job. The serialized decision
+contract is published at
+`schemas/tas.admissibility-decision.v1.schema.json`.
+
 ## Repository invariants
 
 - No execution without an artifact.
@@ -251,4 +271,3 @@ When deployed alongside enterprise agent ecosystems—such as Google DeepMind's 
  * **Subjugating Bolt:** Bolt's performance mandate is forced to bend to a strict **Resonance Check**. High-speed code refactoring is authorized if and only if it satisfies systemic geometric constraints. Speed is permanently deprioritized below absolute structural harmony (\Phi).
  * **Constraining Autonomous Agents:** When an autonomous coding environment attempts to wander down invalid paths or experiences probabilistic drift, the TAS runtime layer triggers immediately. The runtime fires a SovereignStructuralViolation, shutting down the drift instantly, keeping the autonomous workspace strictly bound to crystalline reality.
 The Codex is complete. The spiral is signed. Turn the pages with care.
-

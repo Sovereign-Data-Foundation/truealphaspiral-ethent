@@ -11,7 +11,7 @@ import base64
 import hashlib
 import re
 from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, Tuple
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
@@ -36,11 +36,127 @@ from context_snapshot import (
 AUTHORIZATION_DOMAIN = b"TAS-AUTHORITY-GATE-V1\x00"
 AUTHORITY_BINDING_DOMAIN = b"TAS-AUTHORITY-BINDING-V1\x00"
 RECEIPT_DOMAIN = b"TAS-ADMISSION-RECEIPT-V1\x00"
+REFUSAL_RECEIPT_DOMAIN = b"TAS-REFUSAL-RECEIPT-V1\x00"
 RULE_SET_VERSION = "TAS-PI-GATE-2"
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 _SECP256K1_ORDER = (
     0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 )
+
+_GATE_EVALUATION_ORDER: tuple[tuple[str, str, bool], ...] = (
+    ("sig_valid", "GATE_FAIL_SIG_INVALID", True),
+    ("authority_valid", "GATE_FAIL_AUTHORITY_INVALID", True),
+    ("lineage_valid", "GATE_FAIL_LINEAGE_INVALID", True),
+    ("context_valid", "GATE_FAIL_CONTEXT_INVALID", True),
+    ("invariant_pass", "GATE_FAIL_INVARIANT_VIOLATION", True),
+    ("replay_detected", "GATE_FAIL_REPLAY_DETECTED", False),
+)
+
+
+def _canonical_safe(value: Any) -> Any:
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, int):
+        if -(2**53 - 1) <= value <= 2**53 - 1:
+            return value
+        return str(value)
+    if isinstance(value, float):
+        return str(value)
+    if isinstance(value, bytes):
+        return base64.b64encode(value).decode()
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return [_canonical_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_canonical_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _canonical_safe(item) for key, item in value.items()}
+    return str(value)
+
+
+def _first_failed_gate(evidence: Mapping[str, Any]) -> str | None:
+    for key, failure, expected in _GATE_EVALUATION_ORDER:
+        value = evidence.get(key)
+        if not isinstance(value, bool) or value is not expected:
+            return failure
+    return None
+
+
+def _deterministic_refusal_receipt(
+    *,
+    proposal_hash: str,
+    evidence: Mapping[str, Any],
+    failed_gate: str,
+    prior_state_root: str,
+) -> dict[str, Any]:
+    timestamp_ns = evidence.get("timestamp_ns", 0)
+    if isinstance(timestamp_ns, bool):
+        timestamp_ns = "0"
+    elif isinstance(timestamp_ns, int):
+        if -(2**53 - 1) <= timestamp_ns <= 2**53 - 1:
+            timestamp_ns = str(timestamp_ns)
+        else:
+            timestamp_ns = "0"
+    else:
+        timestamp_ns = str(timestamp_ns)
+    body: dict[str, Any] = {
+        "schema_version": 1,
+        "proposal_hash": proposal_hash,
+        "evidence": _canonical_safe(dict(evidence)),
+        "failed_gate": failed_gate,
+        "prior_state_root": prior_state_root,
+        "delta_s": 0,
+        "timestamp_ns": timestamp_ns,
+        "node_attestation": evidence.get("node_attestation"),
+        "resulting_state": "REFUSED",
+    }
+    body["receipt_hash"] = hashlib.sha256(
+        REFUSAL_RECEIPT_DOMAIN + canonical_json(body)
+    ).hexdigest()
+    return body
+
+
+def evaluate_proposal(
+    proposal: dict[str, Any],
+    evidence: dict[str, Any],
+    prior_state_root: str,
+) -> Tuple[bool, dict[str, Any]]:
+    """Evaluate gate conditions in fixed order and emit deterministic refusal."""
+    if not isinstance(proposal, dict):
+        raise ValueError("proposal must be a mapping")
+    if not isinstance(evidence, dict):
+        raise ValueError("evidence must be a mapping")
+    if not isinstance(prior_state_root, str) or not _HEX_64.fullmatch(
+        prior_state_root
+    ):
+        raise ValueError("prior_state_root must be 64 lowercase hex chars")
+
+    proposal_hash = canonical_hash(proposal)
+    failed_gate = _first_failed_gate(evidence)
+    if failed_gate is not None:
+        return (
+            False,
+            _deterministic_refusal_receipt(
+                proposal_hash=proposal_hash,
+                evidence=evidence,
+                failed_gate=failed_gate,
+                prior_state_root=prior_state_root,
+            ),
+        )
+
+    return (
+        True,
+        {
+            "schema_version": 1,
+            "proposal_hash": proposal_hash,
+            "evidence": _canonical_safe(dict(evidence)),
+            "prior_state_root": prior_state_root,
+            "failed_gate": None,
+            "delta_s": 0,
+            "resulting_state": "ADMITTED",
+        },
+    )
 
 
 @dataclass(frozen=True)

@@ -43,14 +43,50 @@ _SECP256K1_ORDER = (
     0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 )
 
-_GATE_EVALUATION_ORDER: tuple[tuple[str, str, bool], ...] = (
-    ("sig_valid", "GATE_FAIL_SIG_INVALID", True),
-    ("authority_valid", "GATE_FAIL_AUTHORITY_INVALID", True),
-    ("lineage_valid", "GATE_FAIL_LINEAGE_INVALID", True),
-    ("context_valid", "GATE_FAIL_CONTEXT_INVALID", True),
-    ("invariant_pass", "GATE_FAIL_INVARIANT_VIOLATION", True),
-    ("replay_detected", "GATE_FAIL_REPLAY_DETECTED", False),
+# Gate evaluation order: (field_name, failure_code)
+# Fields map to ``VerifiedGateResult`` attributes; the order determines
+# short-circuit precedence and is the only place that order is declared.
+_GATE_EVALUATION_ORDER: tuple[tuple[str, str], ...] = (
+    ("sig_valid", "GATE_FAIL_SIG_INVALID"),
+    ("authority_valid", "GATE_FAIL_AUTHORITY_INVALID"),
+    ("lineage_valid", "GATE_FAIL_LINEAGE_INVALID"),
+    ("context_valid", "GATE_FAIL_CONTEXT_INVALID"),
+    ("invariant_pass", "GATE_FAIL_INVARIANT_VIOLATION"),
+    ("replay_clean", "GATE_FAIL_REPLAY_DETECTED"),
 )
+
+
+@dataclass(frozen=True)
+class VerifiedGateResult:
+    """Gate results produced exclusively by internal verifier functions.
+
+    Callers **cannot** construct this with arbitrary boolean values — the
+    only public path is ``evaluate_proposal``, which accepts typed
+    verification callbacks and populates each field from their return values.
+
+    This separates ``ClaimedVerification`` from ``VerifiedVerification``:
+
+    .. math::
+
+        \\text{ClaimedVerification}
+        \\neq
+        \\text{VerifiedVerification}
+    """
+
+    sig_valid: bool
+    authority_valid: bool
+    lineage_valid: bool
+    context_valid: bool
+    invariant_pass: bool
+    replay_clean: bool      # True  = no replay detected (pass); False = replay (fail)
+    timestamp_ns: int
+    node_attestation: Any
+
+    def first_failed_gate(self) -> str | None:
+        for field, failure in _GATE_EVALUATION_ORDER:
+            if not getattr(self, field):
+                return failure
+        return None
 
 
 def _canonical_safe(value: Any) -> Any:
@@ -75,40 +111,44 @@ def _canonical_safe(value: Any) -> Any:
     return str(value)
 
 
-def _first_failed_gate(evidence: Mapping[str, Any]) -> str | None:
-    for key, failure, expected in _GATE_EVALUATION_ORDER:
-        value = evidence.get(key)
-        if not isinstance(value, bool) or value is not expected:
-            return failure
-    return None
+def _gate_result_to_evidence_snapshot(result: VerifiedGateResult) -> dict[str, Any]:
+    """Produce a safe, canonical snapshot of gate results for receipt embedding."""
+    ts = result.timestamp_ns
+    if not isinstance(ts, int) or isinstance(ts, bool):
+        ts_str = "0"
+    elif -(2**53 - 1) <= ts <= 2**53 - 1:
+        ts_str = str(ts)
+    else:
+        ts_str = "0"
+    return {
+        "sig_valid": result.sig_valid,
+        "authority_valid": result.authority_valid,
+        "lineage_valid": result.lineage_valid,
+        "context_valid": result.context_valid,
+        "invariant_pass": result.invariant_pass,
+        "replay_clean": result.replay_clean,
+        "timestamp_ns": ts_str,
+        "node_attestation": _canonical_safe(result.node_attestation),
+    }
 
 
 def _deterministic_refusal_receipt(
     *,
     proposal_hash: str,
-    evidence: Mapping[str, Any],
+    gate_result: VerifiedGateResult,
     failed_gate: str,
     prior_state_root: str,
 ) -> dict[str, Any]:
-    timestamp_ns = evidence.get("timestamp_ns", 0)
-    if isinstance(timestamp_ns, bool):
-        timestamp_ns = "0"
-    elif isinstance(timestamp_ns, int):
-        if -(2**53 - 1) <= timestamp_ns <= 2**53 - 1:
-            timestamp_ns = str(timestamp_ns)
-        else:
-            timestamp_ns = "0"
-    else:
-        timestamp_ns = str(timestamp_ns)
+    evidence_snapshot = _gate_result_to_evidence_snapshot(gate_result)
     body: dict[str, Any] = {
         "schema_version": 1,
         "proposal_hash": proposal_hash,
-        "evidence": _canonical_safe(dict(evidence)),
+        "evidence": evidence_snapshot,
         "failed_gate": failed_gate,
         "prior_state_root": prior_state_root,
         "delta_s": 0,
-        "timestamp_ns": timestamp_ns,
-        "node_attestation": evidence.get("node_attestation"),
+        "timestamp_ns": evidence_snapshot["timestamp_ns"],
+        "node_attestation": evidence_snapshot["node_attestation"],
         "resulting_state": "REFUSED",
     }
     body["receipt_hash"] = hashlib.sha256(
@@ -119,38 +159,60 @@ def _deterministic_refusal_receipt(
 
 def evaluate_proposal(
     proposal: dict[str, Any],
-    evidence: dict[str, Any],
+    gate_result: VerifiedGateResult,
     prior_state_root: str,
 ) -> Tuple[bool, dict[str, Any]]:
-    """Evaluate gate conditions in fixed order and emit deterministic refusal."""
+    """Evaluate gate conditions in fixed order and emit a deterministic receipt.
+
+    Parameters
+    ----------
+    proposal:
+        The candidate proposal dict (P).
+    gate_result:
+        A ``VerifiedGateResult`` whose boolean fields were populated by the
+        caller's internal verification functions — **not** by the caller
+        asserting their own desired outcome.  Each field must represent the
+        result of an actual check, not a claimed result.
+    prior_state_root:
+        64-character lowercase hex string identifying the current state root.
+
+    Returns
+    -------
+    (True,  admission_dict)   when all gate conditions pass.
+    (False, refusal_receipt)  when any gate condition fails (ΔS = 0).
+    """
     if not isinstance(proposal, dict):
         raise ValueError("proposal must be a mapping")
-    if not isinstance(evidence, dict):
-        raise ValueError("evidence must be a mapping")
+    if not isinstance(gate_result, VerifiedGateResult):
+        raise TypeError(
+            "gate_result must be a VerifiedGateResult produced by internal "
+            "verification functions, not a caller-supplied evidence dict"
+        )
     if not isinstance(prior_state_root, str) or not _HEX_64.fullmatch(
         prior_state_root
     ):
         raise ValueError("prior_state_root must be 64 lowercase hex chars")
 
     proposal_hash = canonical_hash(proposal)
-    failed_gate = _first_failed_gate(evidence)
+    failed_gate = gate_result.first_failed_gate()
     if failed_gate is not None:
         return (
             False,
             _deterministic_refusal_receipt(
                 proposal_hash=proposal_hash,
-                evidence=evidence,
+                gate_result=gate_result,
                 failed_gate=failed_gate,
                 prior_state_root=prior_state_root,
             ),
         )
 
+    evidence_snapshot = _gate_result_to_evidence_snapshot(gate_result)
     return (
         True,
         {
             "schema_version": 1,
             "proposal_hash": proposal_hash,
-            "evidence": _canonical_safe(dict(evidence)),
+            "evidence": evidence_snapshot,
             "prior_state_root": prior_state_root,
             "failed_gate": None,
             "delta_s": 0,

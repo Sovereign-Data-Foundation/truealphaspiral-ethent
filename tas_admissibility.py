@@ -186,10 +186,10 @@ def admit_or_refuse(
     )
 
     if verdict.admissible:
+        new_state_root = apply_transition(proposal, state_root)
+
         # Consume nonce to prevent replay
         seen_nonces.add(envelope.nonce)
-
-        new_state_root = apply_transition(proposal, state_root)
 
         receipt_body: dict[str, Any] = {
             "admitted": True,

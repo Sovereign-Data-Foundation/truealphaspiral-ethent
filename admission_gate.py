@@ -58,11 +58,11 @@ _GATE_EVALUATION_ORDER: tuple[tuple[str, str], ...] = (
 
 @dataclass(frozen=True)
 class VerifiedGateResult:
-    """Gate results produced exclusively by internal verifier functions.
+    """Gate results intended to be produced by internal verifier functions.
 
-    Callers **cannot** construct this with arbitrary boolean values — the
-    only public path is ``evaluate_proposal``, which accepts typed
-    verification callbacks and populates each field from their return values.
+    This dataclass is publicly instantiable, but ``evaluate_proposal`` only accepts
+    a ``VerifiedGateResult`` (and rejects plain dicts) to keep verification outcomes
+    separate from caller-claimed evidence.
 
     This separates ``ClaimedVerification`` from ``VerifiedVerification``:
 

@@ -191,6 +191,12 @@ contract is published at
 - No hash without a ledger entry.
 - No ledger entry without a contextual witness.
 - No unsafe action outside safe mode.
+
+The canonical [Process Science architecture](PROCESS_SCIENCE.md) defines the
+role separation, dual-predicate admissibility law, receipt wire preimage, and
+fail-closed execution invariants that give these repository rules their runtime
+meaning.
+
 ## The Book of TAS: A Sovereign Codex
 *The Formal Architecture of Enforceable Intelligence*
 ## 1. Architectural Paradigm: Generative Mimicry vs. Mechanical Integrity

@@ -83,6 +83,16 @@ def test_admitted_path_returns_admitted_decision():
     assert result["resulting_state"] == "ADMITTED"
     assert result["failed_gate"] is None
     assert result["delta_s"] == 0
+    assert isinstance(result["receipt_hash"], str)
+    assert len(result["receipt_hash"]) == 64
+
+
+def test_admitted_receipt_hash_is_deterministic():
+    admitted1, result1 = evaluate_proposal(_proposal(), _gate_result(), "d" * 64)
+    admitted2, result2 = evaluate_proposal(_proposal(), _gate_result(), "d" * 64)
+    assert admitted1 is True
+    assert admitted2 is True
+    assert result1["receipt_hash"] == result2["receipt_hash"]
 
 
 def test_caller_cannot_supply_raw_evidence_dict():
@@ -106,3 +116,8 @@ def test_caller_cannot_supply_raw_evidence_dict():
     }
     with pytest.raises(TypeError, match="VerifiedGateResult"):
         evaluate_proposal(_proposal(), raw_dict, "e" * 64)  # type: ignore[arg-type]
+
+
+def test_proposal_type_error_mentions_dict():
+    with pytest.raises(ValueError, match="proposal must be a dict"):
+        evaluate_proposal([], _gate_result(), "f" * 64)  # type: ignore[arg-type]

@@ -182,7 +182,7 @@ def evaluate_proposal(
     (False, refusal_receipt)  when any gate condition fails (ΔS = 0).
     """
     if not isinstance(proposal, dict):
-        raise ValueError("proposal must be a mapping")
+        raise ValueError("proposal must be a dict")
     if not isinstance(gate_result, VerifiedGateResult):
         raise TypeError(
             "gate_result must be a VerifiedGateResult produced by internal "
@@ -207,18 +207,19 @@ def evaluate_proposal(
         )
 
     evidence_snapshot = _gate_result_to_evidence_snapshot(gate_result)
-    return (
-        True,
-        {
-            "schema_version": 1,
-            "proposal_hash": proposal_hash,
-            "evidence": evidence_snapshot,
-            "prior_state_root": prior_state_root,
-            "failed_gate": None,
-            "delta_s": 0,
-            "resulting_state": "ADMITTED",
-        },
-    )
+    body: dict[str, Any] = {
+        "schema_version": 1,
+        "proposal_hash": proposal_hash,
+        "evidence": evidence_snapshot,
+        "prior_state_root": prior_state_root,
+        "failed_gate": None,
+        "delta_s": 0,
+        "resulting_state": "ADMITTED",
+    }
+    body["receipt_hash"] = hashlib.sha256(
+        RECEIPT_DOMAIN + canonical_json(body)
+    ).hexdigest()
+    return (True, body)
 
 
 @dataclass(frozen=True)

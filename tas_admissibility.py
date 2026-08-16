@@ -172,10 +172,12 @@ def admit_or_refuse(
     RefusalReceipt    — if ΔS = 0  (transition was refused).
     """
     proposal_hash = _domain_hash(TAS_ADMISSION_DOMAIN, {"proposal": proposal})
+    claim_hash = _domain_hash(TAS_ADMISSION_DOMAIN, {"proposal": envelope.claim})
+    claim_matches_proposal = claim_hash == proposal_hash
 
     # Compute invariant pass BEFORE verification so the two checks remain
     # independent; neither can influence the other's inputs.
-    inv = invariant_check(proposal, state_root)
+    inv = invariant_check(proposal, state_root) and claim_matches_proposal
 
     verdict = verify_evidence(
         envelope,

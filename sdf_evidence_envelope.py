@@ -263,6 +263,8 @@ def verify_evidence(
     current_context: str,
     seen_nonces: Set[str],
     invariant_pass: bool,
+    trusted_authority_keys: Mapping[str, str] | None = None,
+    trusted_credential_keys: Mapping[str, str] | None = None,
 ) -> EvidenceVerdict:
     """Deterministically evaluate all six predicates and return a verdict.
 
@@ -301,7 +303,11 @@ def verify_evidence(
     failed: Optional[str] = None
 
     # --- 1. Authentic -------------------------------------------------------
-    results["authentic"] = _check_authentic(envelope)
+    results["authentic"] = _check_authentic(
+        envelope,
+        trusted_authority_keys=trusted_authority_keys,
+        trusted_credential_keys=trusted_credential_keys,
+    )
     if not results["authentic"]:
         failed = "authentic"
 
@@ -382,14 +388,43 @@ def _is_hex64(s: Any) -> bool:
     return isinstance(s, str) and len(s) == 64 and all(c in _HEX_64 for c in s)
 
 
-def _check_authentic(envelope: SDFEvidenceEnvelope) -> bool:
+def _check_authentic(
+    envelope: SDFEvidenceEnvelope,
+    *,
+    trusted_authority_keys: Mapping[str, str] | None = None,
+    trusted_credential_keys: Mapping[str, str] | None = None,
+) -> bool:
     """Return True iff the envelope signature verifies against the issuer key.
 
     Supports uncompressed secp256k1 public keys (65 bytes, prefix 0x04).
     If the key format or signature is invalid, returns False without raising.
     """
     try:
-        pub_bytes = envelope.issuer.public_key_bytes()
+        trusted_key_b64: str | None = None
+        if trusted_credential_keys is not None:
+            trusted_key_b64 = trusted_credential_keys.get(
+                envelope.issuer.credential_ref
+            )
+        if trusted_key_b64 is None and trusted_authority_keys is not None:
+            trusted_key_b64 = trusted_authority_keys.get(
+                envelope.issuer.authority_id
+            )
+
+        if trusted_key_b64 is not None:
+            if not isinstance(trusted_key_b64, str):
+                return False
+            trusted_pub_bytes = base64.b64decode(trusted_key_b64, validate=True)
+            if trusted_pub_bytes != envelope.issuer.public_key_bytes():
+                return False
+            pub_bytes = trusted_pub_bytes
+        elif (
+            trusted_authority_keys is not None
+            or trusted_credential_keys is not None
+        ):
+            return False
+        else:
+            pub_bytes = envelope.issuer.public_key_bytes()
+
         pub_key = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256K1(), pub_bytes)
         sig_bytes = base64.b64decode(envelope.signature)
         body_bytes = SDF_ENVELOPE_DOMAIN + _canonical_json(envelope.body_dict())

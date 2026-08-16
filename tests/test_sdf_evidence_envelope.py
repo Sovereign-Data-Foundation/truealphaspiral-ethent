@@ -75,7 +75,7 @@ def _make_envelope(
     *,
     key: ec.EllipticCurvePrivateKey,
     authority_id: str = "auth:alice",
-    claim: Any = {"action": "approve", "resource": "doc:42"},
+    claim: Any = {"op": "write"},
     context: str = "ctx:system:v1",
     genesis_hash: str = _GENESIS,
     parent_hash: str | None = None,
@@ -409,6 +409,32 @@ class TestSelfAuthorisingModel:
         assert v.admissible is False
         assert v.failed_predicate == "authentic"
 
+    def test_trusted_authority_key_mismatch_fails_authentic(self) -> None:
+        other_env = _make_envelope(key=_new_key(), authority_id="auth:model")
+        v = verify_evidence(
+            self.env,
+            authority_scope=frozenset({"auth:model"}),
+            current_context="ctx:system:v1",
+            seen_nonces=_nonces(),
+            invariant_pass=True,
+            trusted_authority_keys={"auth:model": other_env.issuer.public_key_b64},
+        )
+        assert v.authentic is False
+        assert v.admissible is False
+        assert v.failed_predicate == "authentic"
+
+    def test_trusted_authority_key_match_preserves_admission(self) -> None:
+        v = verify_evidence(
+            self.env,
+            authority_scope=frozenset({"auth:model"}),
+            current_context="ctx:system:v1",
+            seen_nonces=_nonces(),
+            invariant_pass=True,
+            trusted_authority_keys={"auth:model": self.env.issuer.public_key_b64},
+        )
+        assert v.authentic is True
+        assert v.admissible is True
+
 
 # ---------------------------------------------------------------------------
 # 4. Replay attack
@@ -587,6 +613,22 @@ class TestDeltaSZero:
         assert isinstance(outcome, RefusalReceipt)
         assert outcome.delta_s == 0
 
+    def test_delta_s_zero_on_claim_mismatch(self) -> None:
+        env = _make_envelope(key=self.key, claim={"op": "read"})
+        outcome = admit_or_refuse(
+            proposal={"op": "write"},
+            envelope=env,
+            state_root=_STATE_ROOT,
+            authority_scope=_scope(),
+            current_context="ctx:system:v1",
+            seen_nonces=_nonces(),
+            invariant_check=_invariant_ok,
+            apply_transition=_apply,
+        )
+        assert isinstance(outcome, RefusalReceipt)
+        assert outcome.delta_s == 0
+        assert outcome.failed_predicate == "invariant_pass"
+
     def test_state_root_unchanged_on_all_refusal_paths(self) -> None:
         """Regardless of which predicate fails, state_root must be invariant."""
         failure_scenarios = [
@@ -690,6 +732,7 @@ class TestSpiralInvariant:
         # Cycle n: admission
         env_n = _make_envelope(
             key=self.key,
+            claim={"op": "step-1"},
             nonce="nonce-n",
             sequence=0,
             evidence_id="ev:n",
@@ -712,6 +755,7 @@ class TestSpiralInvariant:
         # still independently supplied via scope.
         env_n1 = _make_envelope(
             key=self.key,
+            claim={"op": "step-2"},
             nonce="nonce-n1",
             sequence=1,
             parent_hash=receipt_hash_n,
@@ -738,6 +782,7 @@ class TestSpiralInvariant:
         nonces2: Set[str] = set()
         env_n1b = _make_envelope(
             key=self.key,
+            claim={"op": "step-2"},
             nonce="nonce-n1b",
             sequence=1,
             parent_hash=receipt_hash_n,
@@ -760,7 +805,9 @@ class TestSpiralInvariant:
 
     def test_refusal_receipt_also_becomes_lineage(self) -> None:
         """Even a refusal receipt is part of the lineage — refusals are auditable."""
-        env = _make_envelope(key=self.key, nonce="refused-nonce")
+        env = _make_envelope(
+            key=self.key, claim={"op": "bad-op"}, nonce="refused-nonce"
+        )
         outcome = admit_or_refuse(
             proposal={"op": "bad-op"},
             envelope=env,

@@ -397,6 +397,9 @@ def _check_authentic(
     """Return True iff the envelope signature verifies against the issuer key.
 
     Supports uncompressed secp256k1 public keys (65 bytes, prefix 0x04).
+    When ``trusted_authority_keys`` or ``trusted_credential_keys`` is provided,
+    authenticity becomes allowlist-based: the envelope must resolve to a trusted
+    key entry and that trusted key must match the envelope key exactly.
     If the key format or signature is invalid, returns False without raising.
     """
     try:
@@ -411,8 +414,6 @@ def _check_authentic(
             )
 
         if trusted_key_b64 is not None:
-            if not isinstance(trusted_key_b64, str):
-                return False
             trusted_pub_bytes = base64.b64decode(trusted_key_b64, validate=True)
             if trusted_pub_bytes != envelope.issuer.public_key_bytes():
                 return False

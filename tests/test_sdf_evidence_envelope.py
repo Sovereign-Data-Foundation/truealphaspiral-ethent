@@ -627,7 +627,7 @@ class TestDeltaSZero:
         )
         assert isinstance(outcome, RefusalReceipt)
         assert outcome.delta_s == 0
-        assert outcome.failed_predicate == "invariant_pass"
+        assert outcome.failed_predicate == "claim_matches_proposal"
 
     def test_state_root_unchanged_on_all_refusal_paths(self) -> None:
         """Regardless of which predicate fails, state_root must be invariant."""

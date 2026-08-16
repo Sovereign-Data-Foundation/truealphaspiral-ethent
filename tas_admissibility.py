@@ -177,7 +177,7 @@ def admit_or_refuse(
 
     # Compute invariant pass BEFORE verification so the two checks remain
     # independent; neither can influence the other's inputs.
-    inv = invariant_check(proposal, state_root) and claim_matches_proposal
+    inv = invariant_check(proposal, state_root)
 
     verdict = verify_evidence(
         envelope,
@@ -186,6 +186,32 @@ def admit_or_refuse(
         seen_nonces=seen_nonces,
         invariant_pass=inv,
     )
+
+    if verdict.admissible and not claim_matches_proposal:
+        mismatch_body: dict[str, Any] = {
+            "evidence_id": envelope.evidence_id,
+            "envelope_canonical_hash": envelope.canonical_hash,
+            "authentic": verdict.authentic,
+            "lineage_intact": verdict.lineage_intact,
+            "scope_covered": verdict.scope_covered,
+            "context_match": verdict.context_match,
+            "nonce_fresh": verdict.nonce_fresh,
+            "invariant_pass": verdict.invariant_pass,
+            "admissible": False,
+            "failed_predicate": "claim_matches_proposal",
+            "delta_s": 0,
+        }
+        verdict = EvidenceVerdict(
+            authentic=verdict.authentic,
+            lineage_intact=verdict.lineage_intact,
+            scope_covered=verdict.scope_covered,
+            context_match=verdict.context_match,
+            nonce_fresh=verdict.nonce_fresh,
+            invariant_pass=verdict.invariant_pass,
+            admissible=False,
+            failed_predicate="claim_matches_proposal",
+            receipt_hash=_domain_hash(SDF_VERDICT_DOMAIN, mismatch_body),
+        )
 
     if verdict.admissible:
         new_state_root = apply_transition(proposal, state_root)

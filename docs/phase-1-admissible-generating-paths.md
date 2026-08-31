@@ -35,6 +35,11 @@ Let `A_0` be the locally verified origin anchor and let a proposed path be:
 P = (A_0, A_1, ..., A_n)
 ```
 
+The first transition is `T_1 : A_0 -> A_1` and MUST use
+`transition_index = 1`. For every subsequent transition `T_i` where `i > 1`,
+`transition_index` MUST equal the immediately preceding transition index plus
+one. `A_0` is an origin state, not a synthetic `T_0` transition.
+
 Every transition envelope `T_i : A_(i-1) -> A_i` MUST contain:
 
 | Field | Operational requirement |
@@ -42,13 +47,32 @@ Every transition envelope `T_i : A_(i-1) -> A_i` MUST contain:
 | `origin_root` | SHA-256 lineage commitment derived from the local `A_0`; never accepted from configuration alone. |
 | `parent_hash` | Commitment to the immediately preceding admitted state. |
 | `state_hash` | Commitment to the canonical bytes of the proposed state. |
-| `transition_index` | Strictly monotonic position in this path. |
+| `transition_index` | Fixed at `1` for `T_1`; thereafter strictly increments by exactly one. |
 | `transform` | Stable identifier for the transformation applied. |
 | `authority_proof` | Independently verifiable authorization for the proposed operation. |
 | `witness` | Canonical evidence needed to reproduce the gate result. |
-| `receipt_seal` | Integrity seal or signature over the complete, domain-separated envelope. |
+| `gate_set_digest` | Cryptographic commitment to the exact, versioned canonical gate-set specification used for this decision. |
+| `receipt_seal` | Integrity seal or signature over the unsigned canonical envelope; the seal itself is never included in its own preimage. |
 
-For a configured set of pure, deterministic predicates `G`, the transition is
+Define the unsigned canonical envelope `U_i` as the canonical serialization of
+all transition fields except `receipt_seal`:
+
+```text
+U_i = CanonicalEncode(T_i without receipt_seal)
+```
+
+The configured gate set `G` MUST itself have a canonical, versioned
+representation, and the transition MUST bind that exact policy:
+
+```text
+gate_set_digest = Hash(CanonicalEncode(G))
+```
+
+The `receipt_seal` MUST be computed over the domain-separated bytes of `U_i` and
+then attached to form `T_i`. Implementations MUST NOT include `receipt_seal` in
+its own signed or MACed preimage.
+
+For the exact gate set committed by `T_i.gate_set_digest`, the transition is
 admissible only when all of the following are true:
 
 ```text
@@ -56,10 +80,15 @@ Admissible(T_i) :=
     Verify(A_0)
     AND T_i.origin_root = LineageHash(A_0)
     AND T_i.parent_hash = Hash(A_(i-1))
-    AND T_i.transition_index = T_(i-1).transition_index + 1
+    AND (
+        (i = 1 AND T_i.transition_index = 1)
+        OR
+        (i > 1 AND T_i.transition_index = T_(i-1).transition_index + 1)
+    )
     AND CanonicalHash(T_i.state) = T_i.state_hash
+    AND T_i.gate_set_digest = Hash(CanonicalEncode(G))
     AND VerifyAuthority(T_i.authority_proof)
-    AND VerifySeal(T_i.receipt_seal, T_i)
+    AND VerifySeal(T_i.receipt_seal, U_i)
     AND every(g(T_i) = TRUE for g in G)
 ```
 
@@ -73,16 +102,19 @@ Verification is a transition precondition, not a post-processing audit.
 
 1. The runtime MUST verify its local `A_0` before opening a candidate path.
 2. It MUST derive the expected origin root from that verified anchor.
-3. It MUST canonicalize and hash the candidate envelope before evaluation.
-4. It MUST validate parent continuity, the exact next transition index,
-   authority, seal, and every configured gate.
-5. It MUST write an admission or refusal receipt before any external effect.
-6. Only an admitted receipt MAY be presented to an actuator, which MUST verify
+3. It MUST resolve the exact gate set committed by `gate_set_digest` and verify
+   that the digest matches the canonical, versioned gate-set specification.
+4. It MUST canonicalize the unsigned envelope `U_i` and verify the attached seal
+   against those exact bytes.
+5. It MUST validate parent continuity, the exact next transition index,
+   authority, and every committed gate.
+6. It MUST write an admission or refusal receipt before any external effect.
+7. Only an admitted receipt MAY be presented to an actuator, which MUST verify
    the receipt again at its trust boundary.
 
-Verification results MUST be bound to the exact candidate bytes. A result for
-one candidate, parent, path position, action scope, or origin root MUST NOT be
-reused for another.
+Verification results MUST be bound to the exact candidate bytes and exact gate
+policy. A result for one candidate, parent, path position, action scope, origin
+root, or `gate_set_digest` MUST NOT be reused for another.
 
 ## 4. Cursive computation
 
@@ -96,14 +128,16 @@ The stroke is initialized from `A_0` and extended at every step:
 ```text
 stroke_0 = H(domain || actor || capability || LineageHash(A_0))
 stroke_i = H(domain || stroke_(i-1) || transition_index
-             || transform || state_hash || witness_hash)
+             || transform || state_hash || witness_hash
+             || gate_set_digest)
 ```
 
 All components MUST use an injective, length-prefixed canonical encoding and a
 versioned domain separator. The resulting `stroke_i` MUST be carried in the
 transition receipt and recomputed by the next verifier. A path is not cursive
-if a step omits its predecessor, changes the origin, skips an index, or cannot
-reproduce the stroke.
+if a step omits its predecessor, changes the origin, skips an index, changes the
+committed gate policy without changing the stroke, or cannot reproduce the
+stroke.
 
 Where the Sovereign Equation is configured, authenticated content dominance is
 a strict gate:
@@ -135,11 +169,12 @@ any verification failure
     -> REFUSED
 ```
 
-An implementation MUST evaluate the same canonical envelope and gate version to
-the same decision. Gate order MAY be optimized for early refusal only when that
-does not alter the decision or omit required refusal evidence. Gate exceptions,
-timeouts, unavailable dependencies, and unsupported versions are failures, not
-permission to continue.
+An implementation MUST evaluate the same unsigned canonical envelope and the
+same committed `gate_set_digest` to the same decision. Gate order MAY be
+optimized for early refusal only when that does not alter the decision or omit
+required refusal evidence. Gate exceptions, timeouts, unavailable dependencies,
+unresolvable gate-set digests, and unsupported gate-set versions are failures,
+not permission to continue.
 
 ## 6. Null Collapse Protocol
 
@@ -150,8 +185,8 @@ MUST:
 2. prevent the candidate and all descendants from reaching an actuator;
 3. set the path result to `REFUSED` (`Π = ∅`);
 4. emit a canonical refusal receipt containing the origin root, candidate and
-   parent commitments, transition index, gate version, failed rule identifiers,
-   and witness hashes;
+   parent commitments, transition index, `gate_set_digest`, failed rule
+   identifiers, and witness hashes;
 5. discard unverified derived state and initialize any subsequent attempt from
    a freshly verified `A_0`; and
 6. require a new path identifier, transition sequence, and authority proof for
@@ -188,14 +223,18 @@ receipts.
 Replay MUST independently verify:
 
 - the local `A_0` and receipt `origin_root`;
-- canonical field encoding and the receipt seal;
-- the complete parent chain and strictly monotonic indices;
-- authority scope, nonce freshness, and gate-version availability;
-- every deterministic predicate against the committed witnesses; and
+- canonical unsigned-envelope encoding and the receipt seal over those bytes;
+- the complete parent chain and the fixed first index `1`, followed only by
+  exact `+1` increments;
+- authority scope and nonce freshness;
+- availability and exact resolution of the committed `gate_set_digest`;
+- every deterministic predicate against the committed witnesses using that
+  exact gate set; and
 - exact agreement between the recomputed and recorded decision.
 
 A replay mismatch is a new refusal event. It MUST NOT rewrite the historical
-receipt or select an alternate branch that happens to admit.
+receipt, substitute a different gate set, or select an alternate branch that
+happens to admit.
 
 ## 8. Conformance checklist
 
@@ -203,10 +242,15 @@ A Phase 1 implementation is conforming only if tests demonstrate all of these
 properties:
 
 - valid single-step and multi-step paths admit and replay identically;
-- substituted `A_0`, parent, state, witness, authority, or seal is refused;
-- missing, duplicate, decreasing, and skipped transition indices are refused;
+- the first transition is exactly index `1`, and missing, duplicate, decreasing,
+  or skipped subsequent indices are refused;
+- substituted `A_0`, parent, state, witness, authority, `gate_set_digest`, or
+  seal is refused;
+- the seal is verified over the unsigned canonical envelope and is not included
+  recursively in its own preimage;
+- unavailable, unknown, or mismatched gate-set digests are refused;
 - `NaN`, positive infinity, and negative infinity in a gate operand are refused;
-- gate errors, timeouts, and unknown gate versions are refused;
+- gate errors and timeouts are refused;
 - no actuator is called before a durable admission receipt exists;
 - refusal blocks descendants and emits a durable refusal receipt;
 - a retry begins from verified `A_0` with fresh path and authority data; and

@@ -326,14 +326,23 @@ class AuthenticatedLineageVerifier:
                 or not self._valid_signature(receipt)
             ):
                 return False
+            child_sequence = child.get("sequence") if child is not None else None
+            receipt_sequence = receipt.get("sequence")
             if (
-                child is not None
-                and child.get("sequence") != receipt.get("sequence", -1) + 1
+                child_sequence is not None
+                and (
+                    not isinstance(child_sequence, int)
+                    or isinstance(child_sequence, bool)
+                    or not isinstance(receipt_sequence, int)
+                    or isinstance(receipt_sequence, bool)
+                    or child_sequence != receipt_sequence + 1
+                )
             ):
                 return False
             parent = receipt.get("parent_receipt_hash")
             if parent is None:
-                return receipt.get("sequence") == 0
+                sequence = receipt.get("sequence")
+                return isinstance(sequence, int) and not isinstance(sequence, bool) and sequence == 0
             if not isinstance(parent, str):
                 return False
             child, current_hash = receipt, parent

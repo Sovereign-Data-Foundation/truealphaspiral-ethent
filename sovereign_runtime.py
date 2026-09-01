@@ -49,7 +49,20 @@ class SovereignRuntime:
         previous_root = self.current_state_root
         request_hash = hashlib.sha256(raw_payload).hexdigest()
         gate = self._build_gate(previous_root)
-        decision = self._normalize_decision(gate.evaluate(raw_payload))
+        try:
+            decision = self._normalize_decision(gate.evaluate(raw_payload))
+        except Exception as gate_error:
+            decision = AdmissibilityDecision(
+                admissible=False,
+                reason=f"GATE_EVALUATION_ERROR:{type(gate_error).__name__}",
+            )
+            return self._rollback_with_witness(
+                previous_root=previous_root,
+                decision=decision,
+                error=f"ADMISSION_DENIED: {decision.reason}",
+                reason="ADMISSION_DENIED",
+                request_hash=request_hash,
+            )
 
         if not decision.admissible:
             reason = decision.reason or "NOT_ADMISSIBLE"
@@ -68,7 +81,7 @@ class SovereignRuntime:
                 previous_root=previous_root,
                 decision=decision,
                 error=(
-                    "ADMISSION_DENIED: "
+                    "STALE_PARENT_ROOT: "
                     f"PARENT_STATE_MISMATCH:{decision.parent_state_root}!={previous_root}"
                 ),
                 reason="PARENT_STATE_MISMATCH",
@@ -81,7 +94,7 @@ class SovereignRuntime:
             return self._rollback_with_witness(
                 previous_root=previous_root,
                 decision=decision,
-                error=f"RUNTIME_PANIC_ROLLBACK: {decode_error}",
+                error=f"PAYLOAD_DECODE_ROLLBACK: {decode_error}",
                 reason="PAYLOAD_UTF8_PANIC",
                 request_hash=request_hash,
             )
@@ -91,12 +104,30 @@ class SovereignRuntime:
             return self._rollback_with_witness(
                 previous_root=previous_root,
                 decision=decision,
-                error=f"RUNTIME_PANIC_ROLLBACK: {decode_error}",
+                error=f"PAYLOAD_DECODE_ROLLBACK: {decode_error}",
                 reason="PAYLOAD_JSON_PANIC",
                 request_hash=request_hash,
             )
+        if not isinstance(payload, Mapping):
+            return self._rollback_with_witness(
+                previous_root=previous_root,
+                decision=decision,
+                error="PAYLOAD_DECODE_ROLLBACK: top-level payload must be an object",
+                reason="PAYLOAD_SHAPE_PANIC",
+                request_hash=request_hash,
+            )
 
-        action_payload = payload.get("action_payload", {})
+        if "action_payload" not in payload or not isinstance(
+            payload["action_payload"], Mapping
+        ):
+            return self._rollback_with_witness(
+                previous_root=previous_root,
+                decision=decision,
+                error="PAYLOAD_DECODE_ROLLBACK: action_payload must be an object",
+                reason="PAYLOAD_SHAPE_PANIC",
+                request_hash=request_hash,
+            )
+        action_payload = payload["action_payload"]
         speculative_state = copy.deepcopy(self.state_store)
 
         try:
@@ -110,8 +141,8 @@ class SovereignRuntime:
                 request_hash=request_hash,
             )
 
+        state_hash = self._state_commitment_hash(speculative_state)
         self.state_store = speculative_state
-        state_hash = self._state_commitment_hash(self.state_store)
         new_root = self._compute_next_state_root(
             previous_root,
             request_hash,

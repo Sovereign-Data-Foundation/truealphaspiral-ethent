@@ -93,6 +93,38 @@ def test_utf8_decode_error_after_admission_is_rolled_back_with_witness():
     assert runtime.history_ledger[0]["reason"] == "PAYLOAD_UTF8_PANIC"
 
 
+def test_non_object_payload_after_admission_is_rolled_back_with_witness():
+    runtime = SovereignRuntime(
+        initial_state_root="root-0",
+        initial_state={"x": 1},
+        gate_factory=lambda _root: DummyGate(DummyDecision(admissible=True)),
+    )
+
+    result = runtime.execute(b"[]")
+
+    assert result.success is False
+    assert runtime.current_state_root == "root-0"
+    assert runtime.state_store == {"x": 1}
+    assert len(runtime.history_ledger) == 1
+    assert runtime.history_ledger[0]["reason"] == "PAYLOAD_SHAPE_PANIC"
+
+
+def test_missing_action_payload_after_admission_is_rolled_back_with_witness():
+    runtime = SovereignRuntime(
+        initial_state_root="root-0",
+        initial_state={"x": 1},
+        gate_factory=lambda _root: DummyGate(DummyDecision(admissible=True)),
+    )
+
+    result = runtime.execute(b"{\"not_action_payload\":{}}")
+
+    assert result.success is False
+    assert runtime.current_state_root == "root-0"
+    assert runtime.state_store == {"x": 1}
+    assert len(runtime.history_ledger) == 1
+    assert runtime.history_ledger[0]["reason"] == "PAYLOAD_SHAPE_PANIC"
+
+
 def test_state_root_commits_to_actual_post_state_not_only_request():
     payload = b'{"action_payload":{"op":"SET","key":"k","value":2}}'
 

@@ -74,7 +74,23 @@ def test_decode_error_after_admission_is_rolled_back_with_witness():
     assert runtime.current_state_root == "root-0"
     assert runtime.state_store == {"x": 1}
     assert len(runtime.history_ledger) == 1
-    assert runtime.history_ledger[0]["reason"] == "PAYLOAD_DECODE_PANIC"
+    assert runtime.history_ledger[0]["reason"] == "PAYLOAD_JSON_PANIC"
+
+
+def test_utf8_decode_error_after_admission_is_rolled_back_with_witness():
+    runtime = SovereignRuntime(
+        initial_state_root="root-0",
+        initial_state={"x": 1},
+        gate_factory=lambda _root: DummyGate(DummyDecision(admissible=True)),
+    )
+
+    result = runtime.execute(b"\x80")
+
+    assert result.success is False
+    assert runtime.current_state_root == "root-0"
+    assert runtime.state_store == {"x": 1}
+    assert len(runtime.history_ledger) == 1
+    assert runtime.history_ledger[0]["reason"] == "PAYLOAD_UTF8_PANIC"
 
 
 def test_state_root_commits_to_actual_post_state_not_only_request():

@@ -51,11 +51,21 @@ class SovereignRuntime:
         gate = self._build_gate(previous_root)
         decision = self._normalize_decision(gate.evaluate(raw_payload))
 
+        if not decision.admissible:
+            reason = decision.reason or "NOT_ADMISSIBLE"
+            return self._rollback_with_witness(
+                previous_root=previous_root,
+                decision=decision,
+                error=f"ADMISSION_DENIED: {reason}",
+                reason="ADMISSION_DENIED",
+                request_hash=request_hash,
+            )
         if (
             decision.parent_state_root is not None
             and decision.parent_state_root != previous_root
         ):
             return self._rollback_with_witness(
+                previous_root=previous_root,
                 decision=decision,
                 error=(
                     "ADMISSION_DENIED: "
@@ -65,22 +75,24 @@ class SovereignRuntime:
                 request_hash=request_hash,
             )
 
-        if not decision.admissible:
-            reason = decision.reason or "NOT_ADMISSIBLE"
-            return self._rollback_with_witness(
-                decision=decision,
-                error=f"ADMISSION_DENIED: {reason}",
-                reason="ADMISSION_DENIED",
-                request_hash=request_hash,
-            )
-
         try:
-            payload = json.loads(raw_payload.decode("utf-8"))
-        except Exception as decode_error:
+            payload_text = raw_payload.decode("utf-8")
+        except UnicodeDecodeError as decode_error:
             return self._rollback_with_witness(
+                previous_root=previous_root,
                 decision=decision,
                 error=f"RUNTIME_PANIC_ROLLBACK: {decode_error}",
-                reason="PAYLOAD_DECODE_PANIC",
+                reason="PAYLOAD_UTF8_PANIC",
+                request_hash=request_hash,
+            )
+        try:
+            payload = json.loads(payload_text)
+        except json.JSONDecodeError as decode_error:
+            return self._rollback_with_witness(
+                previous_root=previous_root,
+                decision=decision,
+                error=f"RUNTIME_PANIC_ROLLBACK: {decode_error}",
+                reason="PAYLOAD_JSON_PANIC",
                 request_hash=request_hash,
             )
 
@@ -91,6 +103,7 @@ class SovereignRuntime:
             state_delta = self._apply_sandbox_action(speculative_state, action_payload)
         except Exception as runtime_err:
             return self._rollback_with_witness(
+                previous_root=previous_root,
                 decision=decision,
                 error=f"RUNTIME_PANIC_ROLLBACK: {runtime_err}",
                 reason="RUNTIME_PANIC",
@@ -133,12 +146,12 @@ class SovereignRuntime:
     def _rollback_with_witness(
         self,
         *,
+        previous_root: str,
         decision: AdmissibilityDecision,
         error: str,
         reason: str,
         request_hash: str,
     ) -> ExecutionResult:
-        previous_root = self.current_state_root
         state_hash = self._state_commitment_hash(self.state_store)
         self._append_history_leaf(
             {
@@ -255,7 +268,9 @@ class SovereignRuntime:
             return {key: value}
 
         if op == "DELETE":
-            if not isinstance(key, str) or key not in sandbox_state:
+            if not isinstance(key, str) or not key:
+                raise ValueError("DELETE operation requires a valid key.")
+            if key not in sandbox_state:
                 raise KeyError(f"Key '{key}' does not exist in state store.")
             sandbox_state.pop(key)
             return {key: "<DELETED>"}

@@ -222,9 +222,7 @@ def evaluate_proposal(
         "delta_s": 0,
         "resulting_state": "ADMITTED",
     }
-    admission_receipt["receipt_hash"] = hashlib.sha256(
-        RECEIPT_DOMAIN + canonical_json(admission_receipt)
-    ).hexdigest()
+    admission_receipt["receipt_hash"] = canonical_hash(admission_receipt)
     return (True, admission_receipt)
 
 

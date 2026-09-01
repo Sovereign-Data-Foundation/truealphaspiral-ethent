@@ -39,6 +39,36 @@ class AdmissibilityDecision:
     refusal_reason: str | None = None
     verifier_signature: str | None = None
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.is_admitted, bool):
+            raise ValueError("is_admitted must be a boolean")
+        tokens = self.allowed_action_tokens
+        if isinstance(tokens, list):
+            tokens = tuple(tokens)
+            object.__setattr__(self, "allowed_action_tokens", tokens)
+        if not isinstance(tokens, tuple):
+            raise TypeError("allowed_action_tokens must be a tuple/list of strings")
+        if not all(isinstance(token, str) and token for token in tokens):
+            raise ValueError("allowed_action_tokens must contain only non-empty strings")
+        if len(set(tokens)) != len(tokens):
+            raise ValueError("allowed action tokens are not unique")
+        for field_name in (
+            "authority_pubkey",
+            "authority_snapshot_hash",
+            "context_snapshot_hash",
+            "candidate_hash",
+            "parent_receipt_hash",
+            "nonce",
+            "timestamp_utc",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{field_name} must be a non-empty string")
+        if self.refusal_reason is not None and not isinstance(self.refusal_reason, str):
+            raise TypeError("refusal_reason must be a string or None")
+        if self.verifier_signature is not None and not isinstance(self.verifier_signature, str):
+            raise TypeError("verifier_signature must be a string or None")
+
     def canonical_payload_dict(self) -> dict[str, Any]:
         return {
             "allowed_action_tokens": sorted(self.allowed_action_tokens),
@@ -81,6 +111,8 @@ class AdmissibilityDecision:
         expected = set(cls.__dataclass_fields__)
         if set(data) != expected:
             raise ValueError("invalid decision field set")
+        if not isinstance(data["allowed_action_tokens"], (list, tuple)):
+            raise ValueError("allowed_action_tokens must be an array of strings")
         return cls(
             authority_pubkey=data["authority_pubkey"],
             authority_snapshot_hash=data["authority_snapshot_hash"],
@@ -218,6 +250,8 @@ class SovereignRuntime:
             decision.allowed_action_tokens
         ):
             raise ValueError("allowed action tokens are not unique")
+        if not all(isinstance(token, str) and token for token in decision.allowed_action_tokens):
+            raise ValueError("allowed action tokens must be non-empty strings")
         try:
             Ed25519PublicKey.from_public_bytes(
                 bytes.fromhex(decision.authority_pubkey)
@@ -238,7 +272,12 @@ class SovereignRuntime:
     def execute(
         self, decision: AdmissibilityDecision, target_action_token: str
     ) -> dict[str, Any]:
+        receipt_action_token = (
+            target_action_token if isinstance(target_action_token, str) else ""
+        )
         try:
+            if not isinstance(target_action_token, str) or not target_action_token:
+                raise ValueError("target action token must be a non-empty string")
             self._verify_decision(decision)
             if self.ledger.contains_decision(decision.compute_digest_hex()):
                 raise ValueError("decision nonce has already been consumed")
@@ -247,7 +286,7 @@ class SovereignRuntime:
         except (ValueError, TypeError) as error:
             receipt = RuntimeReceipt(
                 status="REFUSED",
-                action_token=target_action_token,
+                action_token=receipt_action_token,
                 parent_receipt_hash=decision.parent_receipt_hash,
                 decision_digest_hex=decision.compute_digest_hex(),
                 refusal_reason=str(error),

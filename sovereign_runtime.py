@@ -42,13 +42,15 @@ class AdmissibilityDecision:
     def __post_init__(self) -> None:
         if not isinstance(self.is_admitted, bool):
             raise ValueError("is_admitted must be a boolean")
-        if not isinstance(self.allowed_action_tokens, tuple):
-            raise TypeError("allowed_action_tokens must be a tuple of strings")
-        if not all(
-            isinstance(token, str) and token for token in self.allowed_action_tokens
-        ):
+        tokens = self.allowed_action_tokens
+        if isinstance(tokens, list):
+            tokens = tuple(tokens)
+            object.__setattr__(self, "allowed_action_tokens", tokens)
+        if not isinstance(tokens, tuple):
+            raise TypeError("allowed_action_tokens must be a tuple/list of strings")
+        if not all(isinstance(token, str) and token for token in tokens):
             raise ValueError("allowed_action_tokens must contain only non-empty strings")
-        if len(set(self.allowed_action_tokens)) != len(self.allowed_action_tokens):
+        if len(set(tokens)) != len(tokens):
             raise ValueError("allowed action tokens are not unique")
         for field_name in (
             "authority_pubkey",

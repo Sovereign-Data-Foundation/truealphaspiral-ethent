@@ -79,10 +79,17 @@ def test_admitted_path_returns_admitted_decision():
         _gate_result(),
         "d" * 64,
     )
+    admitted2, result2 = evaluate_proposal(
+        _proposal(),
+        _gate_result(),
+        "d" * 64,
+    )
     assert admitted is True
+    assert admitted2 is True
     assert result["resulting_state"] == "ADMITTED"
     assert result["failed_gate"] is None
     assert result["delta_s"] == 0
+    assert result["receipt_hash"] == result2["receipt_hash"]
 
 
 def test_caller_cannot_supply_raw_evidence_dict():

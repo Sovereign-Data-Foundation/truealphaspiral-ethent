@@ -6,6 +6,7 @@ from dataclasses import replace
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from admission_gate import (
     AUTHORIZATION_DOMAIN,
@@ -13,7 +14,10 @@ from admission_gate import (
     AuthoritySnapshot,
     AuthenticatedLineageVerifier,
     CANONICALIZATION_VERSION,
+    Ed25519Verifier,
+    FileDecisionLedger,
     InMemoryDecisionLedger,
+    LocalEd25519Signer,
     LocalSecp256k1Signer,
     Secp256k1Verifier,
     authority_binding_hash,
@@ -291,3 +295,101 @@ def test_lineage_verifier_rejects_tampered_receipt_content():
     assert not AuthenticatedLineageVerifier(
         ledger, Secp256k1Verifier()
     ).verify(result["receipt_hash"])
+
+
+def test_ed25519_decision_survives_store_restart(tmp_path):
+    authority = LocalEd25519Signer(Ed25519PrivateKey.generate())
+    receipt_signer = LocalEd25519Signer(Ed25519PrivateKey.generate())
+    snapshot = AuthoritySnapshot(
+        "juridical-authority-1",
+        authority.algorithm,
+        authority.public_key,
+        11,
+        False,
+        "c" * 64,
+        "d" * 64,
+        "2030-01-01T00:00:00Z",
+    )
+    definition = make_definition_record(
+        namespace_id="tas:ioc",
+        term="requested_operation",
+        semantic_version="1",
+        definition="An operation explicitly bounded by authority scope.",
+    )
+    definition_id = definition_id_for_mapping(definition)
+    context = ContextSnapshot.build(
+        namespace_id="tas:ioc",
+        context_sequence=0,
+        definition_ids=[definition_id],
+        invariant_set_id="b" * 64,
+        authority_binding_hash=authority_binding_hash(snapshot),
+        parent_context_hash=None,
+        effective_epoch=11,
+    )
+    snapshot = replace(
+        snapshot, context_snapshot_hash=context.context_snapshot_hash
+    )
+    store_path = tmp_path / "decisions"
+    ledger = FileDecisionLedger(store_path)
+    gate = AdmissionGatekeeper(
+        gatekeeper_id="ioc-gate-1",
+        authority_resolver=Resolver(snapshot),
+        context_resolver=InMemoryContextResolver(
+            {context.context_snapshot_hash: canonical_json(context.mapping)},
+            {context.namespace_id: context.context_snapshot_hash},
+        ),
+        definition_resolver=InMemoryDefinitionResolver(
+            {definition_id: canonical_json(definition)}
+        ),
+        verifier=Ed25519Verifier(),
+        receipt_signer=receipt_signer,
+        ledger=ledger,
+    )
+    candidate = {"operation": "READ"}
+    body = {
+        "schema_version": 2,
+        "canonicalization_version": CANONICALIZATION_VERSION,
+        "domain_separator": "TAS_AUTHORITY_GATE_V1",
+        "credential_id": snapshot.credential_id,
+        "authority_checkpoint_hash": snapshot.checkpoint_hash,
+        "authority_epoch": snapshot.authority_epoch,
+        "context_snapshot_hash": context.context_snapshot_hash,
+        "signature_algorithm": authority.algorithm,
+        "requested_operation": "READ",
+        "candidate_hash": canonical_hash(candidate),
+        "parent_receipt_hash": None,
+        "nonce": "ioc-fixed-nonce-1",
+    }
+    envelope = {
+        **body,
+        "signature": base64.b64encode(
+            authority.sign(AUTHORIZATION_DOMAIN + canonical_json(body))
+        ).decode(),
+    }
+
+    result = gate.evaluate(
+        raw_candidate=canonical_json(candidate),
+        raw_envelope=canonical_json(envelope),
+        current_time="2029-01-01T00:00:00Z",
+    )
+
+    assert result["resulting_state"] == "ADMITTED"
+    restarted_ledger = FileDecisionLedger(store_path)
+    assert (
+        restarted_ledger.get_receipt(result["receipt_hash"])
+        == result["receipt"]
+    )
+    assert AuthenticatedLineageVerifier(
+        restarted_ledger, Ed25519Verifier()
+    ).verify(result["receipt_hash"])
+
+
+def test_file_ledger_rejects_tampered_receipt_after_restart(tmp_path):
+    ledger = FileDecisionLedger(tmp_path)
+    receipt = {"resulting_state": "REFUSED", "failure_code": "EMPTY_SET"}
+    receipt_hash = canonical_hash(receipt)
+    ledger.append_decision(receipt_hash, receipt)
+    path = tmp_path / f"{receipt_hash}.json"
+    path.write_bytes(canonical_json({**receipt, "failure_code": "FORGED"}))
+
+    assert FileDecisionLedger(tmp_path).get_receipt(receipt_hash) is None

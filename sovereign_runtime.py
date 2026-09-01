@@ -1,266 +1,327 @@
-"""Fail-closed consumption of verifier-produced admissibility decisions."""
+"""Sovereign runtime with admission-gated speculative execution and atomic rollback."""
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
+import copy
 import hashlib
-import os
-import re
-from dataclasses import dataclass, replace
-from pathlib import Path
-from typing import Any, Mapping, Protocol
-
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-
-from context_snapshot import (
-    CanonicalJSONError,
-    canonical_hash,
-    canonical_json,
-    parse_canonical_json,
-)
-
-_HEX_64 = re.compile(r"^[0-9a-f]{64}$")
-_HEX_128 = re.compile(r"^[0-9a-f]{128}$")
+import json
+from typing import Any, Callable, Dict, Mapping, Optional
 
 
 @dataclass(frozen=True)
 class AdmissibilityDecision:
-    """Immutable, signed execution authority emitted by the Logos verifier."""
-
-    authority_pubkey: str
-    authority_snapshot_hash: str
-    context_snapshot_hash: str
-    candidate_hash: str
-    parent_receipt_hash: str
-    allowed_action_tokens: tuple[str, ...]
-    is_admitted: bool
-    nonce: str
-    timestamp_utc: str
-    refusal_reason: str | None = None
-    verifier_signature: str | None = None
-
-    def canonical_payload_dict(self) -> dict[str, Any]:
-        return {
-            "allowed_action_tokens": sorted(self.allowed_action_tokens),
-            "authority_pubkey": self.authority_pubkey.lower(),
-            "authority_snapshot_hash": self.authority_snapshot_hash.lower(),
-            "candidate_hash": self.candidate_hash.lower(),
-            "context_snapshot_hash": self.context_snapshot_hash.lower(),
-            "is_admitted": self.is_admitted,
-            "nonce": self.nonce,
-            "parent_receipt_hash": self.parent_receipt_hash.lower(),
-            "refusal_reason": self.refusal_reason or "",
-            "timestamp_utc": self.timestamp_utc,
-        }
-
-    def canonical_bytes(self) -> bytes:
-        return canonical_json(self.canonical_payload_dict())
-
-    def compute_digest(self) -> bytes:
-        return hashlib.sha256(self.canonical_bytes()).digest()
-
-    def compute_digest_hex(self) -> str:
-        return self.compute_digest().hex()
-
-    def with_signature(self, signature_hex: str) -> "AdmissibilityDecision":
-        return replace(self, verifier_signature=signature_hex.lower())
-
-    def to_json(self) -> str:
-        return canonical_json(
-            {
-                **self.canonical_payload_dict(),
-                "verifier_signature": self.verifier_signature or "",
-            }
-        ).decode("utf-8")
-
-    @classmethod
-    def from_json(cls, raw: str) -> "AdmissibilityDecision":
-        data = parse_canonical_json(raw.encode("utf-8"))
-        if not isinstance(data, Mapping):
-            raise ValueError("decision must be a JSON object")
-        expected = set(cls.__dataclass_fields__)
-        if set(data) != expected:
-            raise ValueError("invalid decision field set")
-        return cls(
-            authority_pubkey=data["authority_pubkey"],
-            authority_snapshot_hash=data["authority_snapshot_hash"],
-            context_snapshot_hash=data["context_snapshot_hash"],
-            candidate_hash=data["candidate_hash"],
-            parent_receipt_hash=data["parent_receipt_hash"],
-            allowed_action_tokens=tuple(data["allowed_action_tokens"]),
-            is_admitted=data["is_admitted"],
-            nonce=data["nonce"],
-            timestamp_utc=data["timestamp_utc"],
-            refusal_reason=data["refusal_reason"] or None,
-            verifier_signature=data["verifier_signature"] or None,
-        )
+    admissible: bool
+    reason: str = ""
+    principal_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    receipt_hash: str = ""
+    parent_state_root: Optional[str] = None
 
 
 @dataclass(frozen=True)
-class RuntimeReceipt:
-    """Durable evidence of an execution or fail-closed refusal."""
+class ExecutionResult:
+    success: bool
+    previous_state_root: str
+    new_state_root: str
+    decision: AdmissibilityDecision
+    state_delta: Dict[str, Any]
+    error: Optional[str] = None
 
-    status: str
-    action_token: str
-    parent_receipt_hash: str
-    decision_digest_hex: str
-    refusal_reason: str | None
-
-    @property
-    def mapping(self) -> dict[str, Any]:
-        return {
-            "action_token": self.action_token,
-            "decision_digest_hex": self.decision_digest_hex,
-            "parent_receipt_hash": self.parent_receipt_hash,
-            "refusal_reason": self.refusal_reason or "",
-            "status": self.status,
-        }
-
-
-class RuntimeSecurityError(Exception):
-    """Raised only after the runtime has durably recorded a refusal."""
-
-    def __init__(self, receipt: RuntimeReceipt) -> None:
-        self.receipt = receipt
-        super().__init__(receipt)
-
-
-class RuntimeReceiptLedger(Protocol):
-    def append(self, receipt: RuntimeReceipt) -> str: ...
-
-    def get(self, receipt_hash: str) -> Mapping[str, Any] | None: ...
-
-    def contains_decision(self, decision_digest_hex: str) -> bool: ...
-
-
-class FileRuntimeReceiptLedger:
-    """Content-addressed runtime receipts with restart-safe replay detection."""
-
-    def __init__(self, directory: str | os.PathLike[str]) -> None:
-        self.directory = Path(directory)
-        self.directory.mkdir(parents=True, exist_ok=True)
-
-    def append(self, receipt: RuntimeReceipt) -> str:
-        payload = canonical_json(receipt.mapping)
-        receipt_hash = hashlib.sha256(payload).hexdigest()
-        destination = self.directory / f"{receipt_hash}.json"
-        temporary = self.directory / f".{receipt_hash}.{os.getpid()}.tmp"
-        try:
-            descriptor = os.open(
-                temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
-            )
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(payload)
-                stream.flush()
-                os.fsync(stream.fileno())
-            try:
-                os.link(temporary, destination)
-            except FileExistsError as error:
-                raise RuntimeError("runtime receipt already exists") from error
-            temporary.unlink()
-            directory_fd = os.open(self.directory, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        finally:
-            temporary.unlink(missing_ok=True)
-        return receipt_hash
-
-    def get(self, receipt_hash: str) -> Mapping[str, Any] | None:
-        if not _HEX_64.fullmatch(receipt_hash):
-            return None
-        try:
-            raw = (self.directory / f"{receipt_hash}.json").read_bytes()
-            receipt = parse_canonical_json(raw)
-        except (FileNotFoundError, CanonicalJSONError):
-            return None
-        if (
-            not isinstance(receipt, Mapping)
-            or canonical_hash(receipt) != receipt_hash
-        ):
-            return None
-        return dict(receipt)
-
-    def contains_decision(self, decision_digest_hex: str) -> bool:
-        for path in self.directory.glob("*.json"):
-            receipt = self.get(path.stem)
-            if receipt and receipt.get("decision_digest_hex") == decision_digest_hex:
-                return True
-        return False
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
 
 
 class SovereignRuntime:
-    """Execute only tokens present in a cryptographically verified closed set."""
+    def __init__(
+        self,
+        initial_state_root: str,
+        initial_state: Optional[Dict[str, Any]] = None,
+        gate_factory: Optional[Callable[[str], Any]] = None,
+    ):
+        self.current_state_root = initial_state_root
+        self.state_store: Dict[str, Any] = copy.deepcopy(initial_state) if initial_state else {}
+        self.history_ledger: list[Dict[str, Any]] = []
+        self._gate_factory = gate_factory
 
-    def __init__(self, ledger: RuntimeReceiptLedger) -> None:
-        self.ledger = ledger
+    def execute(self, raw_payload: bytes) -> ExecutionResult:
+        """Evaluate, speculate, and commit only on successful admissible execution."""
+        previous_root = self.current_state_root
+        request_hash = hashlib.sha256(raw_payload).hexdigest()
+        gate = self._build_gate(previous_root)
+        try:
+            decision = self._normalize_decision(gate.evaluate(raw_payload))
+        except Exception as gate_error:
+            decision = AdmissibilityDecision(
+                admissible=False,
+                reason=f"GATE_EVALUATION_ERROR:{type(gate_error).__name__}",
+            )
+            return self._rollback_with_witness(
+                previous_root=previous_root,
+                decision=decision,
+                error=f"ADMISSION_DENIED: {decision.reason}",
+                reason="ADMISSION_DENIED",
+                request_hash=request_hash,
+            )
 
-    def _verify_decision(self, decision: AdmissibilityDecision) -> None:
-        digest_fields = (
-            decision.authority_snapshot_hash,
-            decision.context_snapshot_hash,
-            decision.candidate_hash,
-            decision.parent_receipt_hash,
-        )
-        if not _HEX_64.fullmatch(decision.authority_pubkey):
-            raise ValueError("invalid authority public key")
-        if not all(_HEX_64.fullmatch(value) for value in digest_fields):
-            raise ValueError("invalid content binding digest")
-        if len(decision.nonce) < 16:
-            raise ValueError("nonce is too short")
+        if not decision.admissible:
+            reason = decision.reason or "NOT_ADMISSIBLE"
+            return self._rollback_with_witness(
+                previous_root=previous_root,
+                decision=decision,
+                error=f"ADMISSION_DENIED: {reason}",
+                reason="ADMISSION_DENIED",
+                request_hash=request_hash,
+            )
         if (
-            not decision.verifier_signature
-            or not _HEX_128.fullmatch(decision.verifier_signature)
+            decision.parent_state_root is not None
+            and decision.parent_state_root != previous_root
         ):
-            raise ValueError("missing or malformed verifier signature")
-        if len(set(decision.allowed_action_tokens)) != len(
-            decision.allowed_action_tokens
+            return self._rollback_with_witness(
+                previous_root=previous_root,
+                decision=decision,
+                error=(
+                    "STALE_PARENT_ROOT: "
+                    f"PARENT_STATE_MISMATCH:{decision.parent_state_root}!={previous_root}"
+                ),
+                reason="PARENT_STATE_MISMATCH",
+                request_hash=request_hash,
+            )
+
+        try:
+            payload_text = raw_payload.decode("utf-8")
+        except UnicodeDecodeError as decode_error:
+            return self._rollback_with_witness(
+                previous_root=previous_root,
+                decision=decision,
+                error=f"PAYLOAD_DECODE_ROLLBACK: {decode_error}",
+                reason="PAYLOAD_UTF8_PANIC",
+                request_hash=request_hash,
+            )
+        try:
+            payload = json.loads(payload_text)
+        except json.JSONDecodeError as decode_error:
+            return self._rollback_with_witness(
+                previous_root=previous_root,
+                decision=decision,
+                error=f"PAYLOAD_DECODE_ROLLBACK: {decode_error}",
+                reason="PAYLOAD_JSON_PANIC",
+                request_hash=request_hash,
+            )
+        if not isinstance(payload, Mapping):
+            return self._rollback_with_witness(
+                previous_root=previous_root,
+                decision=decision,
+                error="PAYLOAD_DECODE_ROLLBACK: top-level payload must be an object",
+                reason="PAYLOAD_SHAPE_PANIC",
+                request_hash=request_hash,
+            )
+
+        if "action_payload" not in payload or not isinstance(
+            payload["action_payload"], Mapping
         ):
-            raise ValueError("allowed action tokens are not unique")
-        try:
-            Ed25519PublicKey.from_public_bytes(
-                bytes.fromhex(decision.authority_pubkey)
-            ).verify(
-                bytes.fromhex(decision.verifier_signature),
-                decision.compute_digest(),
+            return self._rollback_with_witness(
+                previous_root=previous_root,
+                decision=decision,
+                error="PAYLOAD_DECODE_ROLLBACK: action_payload must be an object",
+                reason="PAYLOAD_SHAPE_PANIC",
+                request_hash=request_hash,
             )
-        except (ValueError, InvalidSignature) as error:
-            raise ValueError("cryptographic signature verification failed") from error
-        if not decision.is_admitted:
-            raise ValueError(
-                "execution rejected by Logos gate: "
-                f"{decision.refusal_reason or 'unspecified'}"
-            )
-        if not decision.allowed_action_tokens:
-            raise ValueError("admitted decision contains an empty allowed action set")
+        action_payload = payload["action_payload"]
+        speculative_state = copy.deepcopy(self.state_store)
 
-    def execute(
-        self, decision: AdmissibilityDecision, target_action_token: str
-    ) -> dict[str, Any]:
         try:
-            self._verify_decision(decision)
-            if self.ledger.contains_decision(decision.compute_digest_hex()):
-                raise ValueError("decision nonce has already been consumed")
-            if target_action_token not in decision.allowed_action_tokens:
-                raise ValueError("target action token is outside the allowed set")
-        except (ValueError, TypeError) as error:
-            receipt = RuntimeReceipt(
-                status="REFUSED",
-                action_token=target_action_token,
-                parent_receipt_hash=decision.parent_receipt_hash,
-                decision_digest_hex=decision.compute_digest_hex(),
-                refusal_reason=str(error),
+            state_delta = self._apply_sandbox_action(speculative_state, action_payload)
+        except Exception as runtime_err:
+            return self._rollback_with_witness(
+                previous_root=previous_root,
+                decision=decision,
+                error=f"RUNTIME_PANIC_ROLLBACK: {runtime_err}",
+                reason="RUNTIME_PANIC",
+                request_hash=request_hash,
             )
-            self.ledger.append(receipt)
-            raise RuntimeSecurityError(receipt) from error
 
-        receipt = RuntimeReceipt(
-            status="EXECUTED",
-            action_token=target_action_token,
-            parent_receipt_hash=decision.parent_receipt_hash,
-            decision_digest_hex=decision.compute_digest_hex(),
-            refusal_reason=None,
+        state_hash = self._state_commitment_hash(speculative_state)
+        self.state_store = speculative_state
+        new_root = self._compute_next_state_root(
+            previous_root,
+            request_hash,
+            state_hash,
+            decision.receipt_hash,
         )
-        receipt_hash = self.ledger.append(receipt)
-        return {**receipt.mapping, "receipt_hash": receipt_hash}
+        self.current_state_root = new_root
+
+        self._append_history_leaf(
+            {
+                "event": "COMMIT",
+                "previous_root": previous_root,
+                "new_root": new_root,
+                "principal_id": decision.principal_id,
+                "agent_id": decision.agent_id,
+                "receipt_hash": decision.receipt_hash,
+                "request_hash": request_hash,
+                "state_hash": state_hash,
+                "delta": state_delta,
+            }
+        )
+
+        return ExecutionResult(
+            success=True,
+            previous_state_root=previous_root,
+            new_state_root=new_root,
+            decision=decision,
+            state_delta=state_delta,
+            error=None,
+        )
+
+    def _rollback_with_witness(
+        self,
+        *,
+        previous_root: str,
+        decision: AdmissibilityDecision,
+        error: str,
+        reason: str,
+        request_hash: str,
+    ) -> ExecutionResult:
+        state_hash = self._state_commitment_hash(self.state_store)
+        self._append_history_leaf(
+            {
+                "event": "ROLLBACK",
+                "reason": reason,
+                "previous_root": previous_root,
+                "new_root": previous_root,
+                "principal_id": decision.principal_id,
+                "agent_id": decision.agent_id,
+                "receipt_hash": decision.receipt_hash,
+                "request_hash": request_hash,
+                "state_hash": state_hash,
+                "delta": {},
+                "error": error,
+            }
+        )
+        return ExecutionResult(
+            success=False,
+            previous_state_root=previous_root,
+            new_state_root=previous_root,
+            decision=decision,
+            state_delta={},
+            error=error,
+        )
+
+    def _build_gate(self, current_state_root: str) -> Any:
+        if self._gate_factory is not None:
+            return self._gate_factory(current_state_root)
+
+        try:
+            from admission_gate import AdmissionGate  # type: ignore
+        except ImportError as import_error:  # pragma: no cover
+            raise RuntimeError(
+                "No gate_factory provided and admission_gate.AdmissionGate is unavailable"
+            ) from import_error
+        return AdmissionGate(current_state_root=current_state_root)
+
+    @staticmethod
+    def _normalize_decision(raw_decision: Any) -> AdmissibilityDecision:
+        if isinstance(raw_decision, AdmissibilityDecision):
+            return raw_decision
+
+        if isinstance(raw_decision, Mapping):
+            return AdmissibilityDecision(
+                admissible=bool(raw_decision.get("admissible", False)),
+                reason=str(raw_decision.get("reason", "")),
+                principal_id=_as_optional_str(raw_decision.get("principal_id")),
+                agent_id=_as_optional_str(raw_decision.get("agent_id")),
+                receipt_hash=str(raw_decision.get("receipt_hash", "")),
+                parent_state_root=_as_optional_str(raw_decision.get("parent_state_root")),
+            )
+
+        return AdmissibilityDecision(
+            admissible=bool(getattr(raw_decision, "admissible", False)),
+            reason=str(getattr(raw_decision, "reason", "")),
+            principal_id=_as_optional_str(getattr(raw_decision, "principal_id", None)),
+            agent_id=_as_optional_str(getattr(raw_decision, "agent_id", None)),
+            receipt_hash=str(getattr(raw_decision, "receipt_hash", "")),
+            parent_state_root=_as_optional_str(
+                getattr(raw_decision, "parent_state_root", None)
+            ),
+        )
+
+    @staticmethod
+    def _canonical_hash(value: Any) -> str:
+        normalized = _normalize_for_canonical(value)
+        canonical = json.dumps(
+            normalized,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _state_commitment_hash(cls, state: Mapping[str, Any]) -> str:
+        return cls._canonical_hash(state)
+
+    @staticmethod
+    def _compute_next_state_root(
+        previous_root: str,
+        request_hash: str,
+        post_state_hash: str,
+        receipt_hash: str,
+    ) -> str:
+        material = {
+            "previous_root": previous_root,
+            "request_hash": request_hash,
+            "post_state_hash": post_state_hash,
+            "receipt_hash": receipt_hash,
+        }
+        return SovereignRuntime._canonical_hash(material)
+
+    def _append_history_leaf(self, entry: Dict[str, Any]) -> None:
+        self.history_ledger.append(entry)
+
+    def _apply_sandbox_action(
+        self,
+        sandbox_state: Dict[str, Any],
+        action: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """Execute bounded deterministic state mutations in speculative memory."""
+        if not isinstance(action, Mapping):
+            raise TypeError("Action payload must be a mapping.")
+
+        op = action.get("op")
+        key = action.get("key")
+        value = action.get("value")
+
+        if op == "SET":
+            if not isinstance(key, str) or not key:
+                raise ValueError("SET operation requires a valid key.")
+            sandbox_state[key] = value
+            return {key: value}
+
+        if op == "DELETE":
+            if not isinstance(key, str) or not key:
+                raise ValueError("DELETE operation requires a valid key.")
+            if key not in sandbox_state:
+                raise KeyError(f"Key '{key}' does not exist in state store.")
+            sandbox_state.pop(key)
+            return {key: "<DELETED>"}
+
+        raise ValueError(f"Unsupported operation: {op!r}")
+
+
+def _as_optional_str(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) else None
+
+
+def _normalize_for_canonical(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _normalize_for_canonical(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_normalize_for_canonical(v) for v in value]
+    if isinstance(value, tuple):
+        return [_normalize_for_canonical(v) for v in value]
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (int, float, str)):
+        return value
+    return str(value)

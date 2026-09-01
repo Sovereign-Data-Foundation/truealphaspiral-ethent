@@ -47,10 +47,14 @@ class SovereignRuntime:
     def execute(self, raw_payload: bytes) -> ExecutionResult:
         """Evaluate, speculate, and commit only on successful admissible execution."""
         previous_root = self.current_state_root
+        request_hash = hashlib.sha256(raw_payload).hexdigest()
         gate = self._build_gate(previous_root)
         decision = self._normalize_decision(gate.evaluate(raw_payload))
 
-        if decision.parent_state_root and decision.parent_state_root != previous_root:
+        if (
+            decision.parent_state_root is not None
+            and decision.parent_state_root != previous_root
+        ):
             return self._rollback_with_witness(
                 decision=decision,
                 error=(
@@ -58,8 +62,7 @@ class SovereignRuntime:
                     f"PARENT_STATE_MISMATCH:{decision.parent_state_root}!={previous_root}"
                 ),
                 reason="PARENT_STATE_MISMATCH",
-                raw_payload=raw_payload,
-                action_payload=None,
+                request_hash=request_hash,
             )
 
         if not decision.admissible:
@@ -68,8 +71,7 @@ class SovereignRuntime:
                 decision=decision,
                 error=f"ADMISSION_DENIED: {reason}",
                 reason="ADMISSION_DENIED",
-                raw_payload=raw_payload,
-                action_payload=None,
+                request_hash=request_hash,
             )
 
         try:
@@ -79,8 +81,7 @@ class SovereignRuntime:
                 decision=decision,
                 error=f"RUNTIME_PANIC_ROLLBACK: {decode_error}",
                 reason="PAYLOAD_DECODE_PANIC",
-                raw_payload=raw_payload,
-                action_payload=None,
+                request_hash=request_hash,
             )
 
         action_payload = payload.get("action_payload", {})
@@ -93,12 +94,10 @@ class SovereignRuntime:
                 decision=decision,
                 error=f"RUNTIME_PANIC_ROLLBACK: {runtime_err}",
                 reason="RUNTIME_PANIC",
-                raw_payload=raw_payload,
-                action_payload=action_payload,
+                request_hash=request_hash,
             )
 
         self.state_store = speculative_state
-        request_hash = self._canonical_hash(action_payload)
         state_hash = self._state_commitment_hash(self.state_store)
         new_root = self._compute_next_state_root(
             previous_root,
@@ -137,15 +136,9 @@ class SovereignRuntime:
         decision: AdmissibilityDecision,
         error: str,
         reason: str,
-        raw_payload: bytes,
-        action_payload: Optional[Mapping[str, Any]],
+        request_hash: str,
     ) -> ExecutionResult:
         previous_root = self.current_state_root
-        request_hash = (
-            self._canonical_hash(action_payload)
-            if action_payload is not None
-            else hashlib.sha256(raw_payload).hexdigest()
-        )
         state_hash = self._state_commitment_hash(self.state_store)
         self._append_history_leaf(
             {
@@ -231,8 +224,13 @@ class SovereignRuntime:
         post_state_hash: str,
         receipt_hash: str,
     ) -> str:
-        material = "|".join((previous_root, request_hash, post_state_hash, receipt_hash))
-        return hashlib.sha256(material.encode("utf-8")).hexdigest()
+        material = {
+            "previous_root": previous_root,
+            "request_hash": request_hash,
+            "post_state_hash": post_state_hash,
+            "receipt_hash": receipt_hash,
+        }
+        return SovereignRuntime._canonical_hash(material)
 
     def _append_history_leaf(self, entry: Dict[str, Any]) -> None:
         self.history_ledger.append(entry)
@@ -266,7 +264,7 @@ class SovereignRuntime:
 
 
 def _as_optional_str(value: Any) -> Optional[str]:
-    return value if isinstance(value, str) and value else None
+    return value if isinstance(value, str) else None
 
 
 def _normalize_for_canonical(value: Any) -> Any:

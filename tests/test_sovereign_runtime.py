@@ -117,3 +117,21 @@ def test_speculative_state_isolated_from_protected_state_on_panic():
     assert runtime.state_store["nested"]["x"] == 1
     assert runtime.current_state_root == "root-0"
     assert runtime.history_ledger[0]["reason"] == "RUNTIME_PANIC"
+
+
+def test_parent_state_mismatch_rolls_back_and_records_witness():
+    runtime = SovereignRuntime(
+        initial_state_root="root-0",
+        initial_state={"x": 1},
+        gate_factory=lambda _root: DummyGate(
+            DummyDecision(admissible=True, parent_state_root="root-old")
+        ),
+    )
+
+    result = runtime.execute(b'{"action_payload":{"op":"SET","key":"x","value":2}}')
+
+    assert result.success is False
+    assert runtime.current_state_root == "root-0"
+    assert runtime.state_store["x"] == 1
+    assert len(runtime.history_ledger) == 1
+    assert runtime.history_ledger[0]["reason"] == "PARENT_STATE_MISMATCH"

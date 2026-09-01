@@ -124,6 +124,22 @@ def test_token_outside_closed_set_fails_closed(tmp_path, signed_decision_factory
     _assert_durable_refusal(error, tmp_path)
 
 
+@pytest.mark.parametrize(
+    "target_action_token", [None, 1, ""], ids=["null", "integer", "empty"]
+)
+def test_malformed_target_token_fails_closed(
+    tmp_path, signed_decision_factory, target_action_token
+):
+    with pytest.raises(RuntimeSecurityError) as error:
+        _runtime(tmp_path).execute(
+            signed_decision_factory(), target_action_token
+        )
+
+    assert error.value.receipt.action_token == ""
+    assert "target action token" in error.value.receipt.refusal_reason
+    _assert_durable_refusal(error, tmp_path)
+
+
 def test_replay_fails_closed_after_restart(tmp_path, signed_decision_factory):
     decision = signed_decision_factory()
     _runtime(tmp_path).execute(decision, "TOKEN_EXECUTE_QUERY")
@@ -151,3 +167,39 @@ def test_contract_round_trip_and_json_schema(tmp_path, signed_decision_factory):
         schema, format_checker=jsonschema.FormatChecker()
     )
     validator.validate(json.loads(decision.to_json()))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("is_admitted", 1),
+        ("allowed_action_tokens", "TOKEN_EXECUTE_QUERY"),
+        ("allowed_action_tokens", ["TOKEN_EXECUTE_QUERY", ""]),
+        ("allowed_action_tokens", ["TOKEN_EXECUTE_QUERY", "TOKEN_EXECUTE_QUERY"]),
+    ],
+)
+def test_from_json_rejects_malformed_admissibility_fields(
+    signed_decision_factory, field, value
+):
+    payload = json.loads(signed_decision_factory().to_json())
+    payload[field] = value
+
+    with pytest.raises((TypeError, ValueError)):
+        AdmissibilityDecision.from_json(json.dumps(payload))
+
+
+def test_runtime_refuses_tampered_duplicate_action_tokens(
+    tmp_path, signed_decision_factory
+):
+    decision = signed_decision_factory()
+    object.__setattr__(
+        decision,
+        "allowed_action_tokens",
+        ("TOKEN_EXECUTE_QUERY", "TOKEN_EXECUTE_QUERY"),
+    )
+
+    with pytest.raises(RuntimeSecurityError) as error:
+        _runtime(tmp_path).execute(decision, "TOKEN_EXECUTE_QUERY")
+
+    assert "not unique" in error.value.receipt.refusal_reason
+    _assert_durable_refusal(error, tmp_path)

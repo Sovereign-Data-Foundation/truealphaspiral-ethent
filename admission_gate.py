@@ -329,7 +329,7 @@ class AuthenticatedLineageVerifier:
             child_sequence = child.get("sequence") if child is not None else None
             receipt_sequence = receipt.get("sequence")
             if (
-                child_sequence is not None
+                child is not None
                 and (
                     not isinstance(child_sequence, int)
                     or isinstance(child_sequence, bool)

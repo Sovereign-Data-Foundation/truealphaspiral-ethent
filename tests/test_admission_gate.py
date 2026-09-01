@@ -297,6 +297,35 @@ def test_lineage_verifier_rejects_tampered_receipt_content():
     ).verify(result["receipt_hash"])
 
 
+def test_lineage_verifier_rejects_child_without_sequence():
+    class PermissiveVerifier:
+        def verify_signature(self, **_):
+            return True
+
+    ledger = InMemoryDecisionLedger()
+    root = {
+        "sequence": 0,
+        "parent_receipt_hash": None,
+        "signature_algorithm": "test",
+        "gatekeeper_public_key": "AA==",
+        "signature": "AA==",
+    }
+    root_hash = canonical_hash(root)
+    child = {
+        "parent_receipt_hash": root_hash,
+        "signature_algorithm": "test",
+        "gatekeeper_public_key": "AA==",
+        "signature": "AA==",
+    }
+    child_hash = canonical_hash(child)
+    ledger.append_decision(root_hash, root)
+    ledger.append_decision(child_hash, child)
+
+    assert not AuthenticatedLineageVerifier(
+        ledger, PermissiveVerifier()
+    ).verify(child_hash)
+
+
 def test_ed25519_decision_survives_store_restart(tmp_path):
     authority = LocalEd25519Signer(Ed25519PrivateKey.generate())
     receipt_signer = LocalEd25519Signer(Ed25519PrivateKey.generate())

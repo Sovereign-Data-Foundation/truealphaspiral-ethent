@@ -272,9 +272,12 @@ class SovereignRuntime:
     def execute(
         self, decision: AdmissibilityDecision, target_action_token: str
     ) -> dict[str, Any]:
-        if not isinstance(target_action_token, str) or not target_action_token:
-            raise ValueError("target action token must be a non-empty string")
+        receipt_action_token = (
+            target_action_token if isinstance(target_action_token, str) else ""
+        )
         try:
+            if not isinstance(target_action_token, str) or not target_action_token:
+                raise ValueError("target action token must be a non-empty string")
             self._verify_decision(decision)
             if self.ledger.contains_decision(decision.compute_digest_hex()):
                 raise ValueError("decision nonce has already been consumed")
@@ -283,7 +286,7 @@ class SovereignRuntime:
         except (ValueError, TypeError) as error:
             receipt = RuntimeReceipt(
                 status="REFUSED",
-                action_token=target_action_token,
+                action_token=receipt_action_token,
                 parent_receipt_hash=decision.parent_receipt_hash,
                 decision_digest_hex=decision.compute_digest_hex(),
                 refusal_reason=str(error),

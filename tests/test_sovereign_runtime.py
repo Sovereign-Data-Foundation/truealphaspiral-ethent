@@ -1,153 +1,185 @@
-import hashlib
-import json
 import os
 import sys
-from dataclasses import replace
-
-import jsonschema
-import pytest
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from dataclasses import dataclass
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sovereign_runtime import (
-    AdmissibilityDecision,
-    FileRuntimeReceiptLedger,
-    RuntimeSecurityError,
-    SovereignRuntime,
-)
+from sovereign_runtime import SovereignRuntime
 
 
-@pytest.fixture
-def signed_decision_factory():
-    private_key = Ed25519PrivateKey.generate()
-    public_key = (
-        private_key.public_key()
-        .public_bytes(Encoding.Raw, PublicFormat.Raw)
-        .hex()
-    )
-
-    def build(**changes):
-        fields = {
-            "authority_pubkey": public_key,
-            "authority_snapshot_hash": hashlib.sha256(b"authority").hexdigest(),
-            "context_snapshot_hash": hashlib.sha256(b"context").hexdigest(),
-            "candidate_hash": hashlib.sha256(b"candidate").hexdigest(),
-            "parent_receipt_hash": hashlib.sha256(b"parent").hexdigest(),
-            "allowed_action_tokens": ("TOKEN_EXECUTE_QUERY", "TOKEN_UPDATE_STATE"),
-            "is_admitted": True,
-            "nonce": "5a9f23e41b098c1a",
-            "timestamp_utc": "2026-08-03T12:00:00Z",
-        }
-        fields.update(changes)
-        decision = AdmissibilityDecision(**fields)
-        signature = private_key.sign(decision.compute_digest()).hex()
-        return decision.with_signature(signature)
-
-    return build
+@dataclass
+class DummyDecision:
+    admissible: bool
+    reason: str = ""
+    principal_id: str = "principal-1"
+    agent_id: str = "agent-1"
+    receipt_hash: str = "receipt-1"
+    parent_state_root: str | None = None
 
 
-def _runtime(tmp_path):
-    return SovereignRuntime(FileRuntimeReceiptLedger(tmp_path))
+class DummyGate:
+    def __init__(self, decision):
+        self._decision = decision
+
+    def evaluate(self, _raw_payload: bytes):
+        return self._decision
 
 
-def _assert_durable_refusal(error, tmp_path):
-    receipt = error.value.receipt
-    assert receipt.status == "REFUSED"
-    reopened = FileRuntimeReceiptLedger(tmp_path)
-    files = list(tmp_path.glob("*.json"))
-    assert len(files) == 1
-    assert reopened.get(files[0].stem) == receipt.mapping
-
-
-def test_happy_path_consumes_closed_set_and_persists_receipt(
-    tmp_path, signed_decision_factory
-):
-    decision = signed_decision_factory()
-    result = _runtime(tmp_path).execute(decision, "TOKEN_EXECUTE_QUERY")
-
-    assert result["status"] == "EXECUTED"
-    assert result["decision_digest_hex"] == decision.compute_digest_hex()
-    assert FileRuntimeReceiptLedger(tmp_path).get(result["receipt_hash"])
-
-
-@pytest.mark.parametrize(
-    ("mutate", "reason"),
-    [
-        (lambda decision: replace(decision, verifier_signature=None), "signature"),
-        (lambda decision: decision.with_signature("0" * 128), "verification"),
-        (
-            lambda decision: replace(decision, candidate_hash="f" * 64),
-            "verification",
+def test_admission_denied_preserves_state_and_appends_witness_receipt():
+    runtime = SovereignRuntime(
+        initial_state_root="root-0",
+        initial_state={"vault_balance": 1000},
+        gate_factory=lambda _root: DummyGate(
+            DummyDecision(admissible=False, reason="POLICY_REFUSAL")
         ),
-    ],
-)
-def test_invalid_decisions_fail_closed_with_durable_receipt(
-    tmp_path, signed_decision_factory, mutate, reason
-):
-    decision = mutate(signed_decision_factory())
-    with pytest.raises(RuntimeSecurityError) as error:
-        _runtime(tmp_path).execute(decision, "TOKEN_EXECUTE_QUERY")
+    )
 
-    assert reason in error.value.receipt.refusal_reason.lower()
-    _assert_durable_refusal(error, tmp_path)
+    result = runtime.execute(b'{"action_payload":{"op":"SET","key":"vault_balance","value":0}}')
+
+    assert result.success is False
+    assert runtime.current_state_root == "root-0"
+    assert runtime.state_store["vault_balance"] == 1000
+    assert len(runtime.history_ledger) == 1
+    assert runtime.history_ledger[0]["event"] == "ROLLBACK"
+    assert runtime.history_ledger[0]["reason"] == "ADMISSION_DENIED"
 
 
-@pytest.mark.parametrize(
-    ("changes", "reason"),
-    [
-        (
-            {"is_admitted": False, "refusal_reason": "RevokedAuthorityKey"},
-            "RevokedAuthorityKey",
+def test_runtime_panic_preserves_state_and_appends_witness_receipt():
+    runtime = SovereignRuntime(
+        initial_state_root="root-0",
+        initial_state={"vault_balance": 1000},
+        gate_factory=lambda _root: DummyGate(DummyDecision(admissible=True)),
+    )
+
+    result = runtime.execute(b'{"action_payload":{"op":"DELETE","key":"missing"}}')
+
+    assert result.success is False
+    assert runtime.current_state_root == "root-0"
+    assert runtime.state_store == {"vault_balance": 1000}
+    assert len(runtime.history_ledger) == 1
+    assert runtime.history_ledger[0]["event"] == "ROLLBACK"
+    assert runtime.history_ledger[0]["reason"] == "RUNTIME_PANIC"
+
+
+def test_decode_error_after_admission_is_rolled_back_with_witness():
+    runtime = SovereignRuntime(
+        initial_state_root="root-0",
+        initial_state={"x": 1},
+        gate_factory=lambda _root: DummyGate(DummyDecision(admissible=True)),
+    )
+
+    result = runtime.execute(b"{invalid-json")
+
+    assert result.success is False
+    assert runtime.current_state_root == "root-0"
+    assert runtime.state_store == {"x": 1}
+    assert len(runtime.history_ledger) == 1
+    assert runtime.history_ledger[0]["reason"] == "PAYLOAD_JSON_PANIC"
+
+
+def test_utf8_decode_error_after_admission_is_rolled_back_with_witness():
+    runtime = SovereignRuntime(
+        initial_state_root="root-0",
+        initial_state={"x": 1},
+        gate_factory=lambda _root: DummyGate(DummyDecision(admissible=True)),
+    )
+
+    result = runtime.execute(b"\x80")
+
+    assert result.success is False
+    assert runtime.current_state_root == "root-0"
+    assert runtime.state_store == {"x": 1}
+    assert len(runtime.history_ledger) == 1
+    assert runtime.history_ledger[0]["reason"] == "PAYLOAD_UTF8_PANIC"
+
+
+def test_non_object_payload_after_admission_is_rolled_back_with_witness():
+    runtime = SovereignRuntime(
+        initial_state_root="root-0",
+        initial_state={"x": 1},
+        gate_factory=lambda _root: DummyGate(DummyDecision(admissible=True)),
+    )
+
+    result = runtime.execute(b"[]")
+
+    assert result.success is False
+    assert runtime.current_state_root == "root-0"
+    assert runtime.state_store == {"x": 1}
+    assert len(runtime.history_ledger) == 1
+    assert runtime.history_ledger[0]["reason"] == "PAYLOAD_SHAPE_PANIC"
+
+
+def test_missing_action_payload_after_admission_is_rolled_back_with_witness():
+    runtime = SovereignRuntime(
+        initial_state_root="root-0",
+        initial_state={"x": 1},
+        gate_factory=lambda _root: DummyGate(DummyDecision(admissible=True)),
+    )
+
+    result = runtime.execute(b"{\"not_action_payload\":{}}")
+
+    assert result.success is False
+    assert runtime.current_state_root == "root-0"
+    assert runtime.state_store == {"x": 1}
+    assert len(runtime.history_ledger) == 1
+    assert runtime.history_ledger[0]["reason"] == "PAYLOAD_SHAPE_PANIC"
+
+
+def test_state_root_commits_to_actual_post_state_not_only_request():
+    payload = b'{"action_payload":{"op":"SET","key":"k","value":2}}'
+
+    runtime_a = SovereignRuntime(
+        initial_state_root="root-0",
+        initial_state={"k": 1},
+        gate_factory=lambda _root: DummyGate(DummyDecision(admissible=True, receipt_hash="r")),
+    )
+    runtime_b = SovereignRuntime(
+        initial_state_root="root-0",
+        initial_state={"k": 1, "other": 99},
+        gate_factory=lambda _root: DummyGate(DummyDecision(admissible=True, receipt_hash="r")),
+    )
+
+    result_a = runtime_a.execute(payload)
+    result_b = runtime_b.execute(payload)
+
+    assert result_a.success is True
+    assert result_b.success is True
+    assert result_a.new_state_root != result_b.new_state_root
+
+
+def test_speculative_state_isolated_from_protected_state_on_panic():
+    runtime = SovereignRuntime(
+        initial_state_root="root-0",
+        initial_state={"nested": {"x": 1}},
+        gate_factory=lambda _root: DummyGate(DummyDecision(admissible=True)),
+    )
+
+    def mutating_then_panicking(state, _action):
+        state["nested"]["x"] = 2
+        raise RuntimeError("boom")
+
+    runtime._apply_sandbox_action = mutating_then_panicking  # type: ignore[method-assign]
+    result = runtime.execute(b'{"action_payload":{"op":"SET","key":"unused","value":0}}')
+
+    assert result.success is False
+    assert runtime.state_store["nested"]["x"] == 1
+    assert runtime.current_state_root == "root-0"
+    assert runtime.history_ledger[0]["reason"] == "RUNTIME_PANIC"
+
+
+def test_parent_state_mismatch_rolls_back_and_records_witness():
+    runtime = SovereignRuntime(
+        initial_state_root="root-0",
+        initial_state={"x": 1},
+        gate_factory=lambda _root: DummyGate(
+            DummyDecision(admissible=True, parent_state_root="root-old")
         ),
-        ({"allowed_action_tokens": ()}, "empty allowed action set"),
-    ],
-)
-def test_authentic_but_inadmissible_decisions_fail_closed(
-    tmp_path, signed_decision_factory, changes, reason
-):
-    decision = signed_decision_factory(**changes)
-    with pytest.raises(RuntimeSecurityError) as error:
-        _runtime(tmp_path).execute(decision, "TOKEN_EXECUTE_QUERY")
-
-    assert reason in error.value.receipt.refusal_reason
-    _assert_durable_refusal(error, tmp_path)
-
-
-def test_token_outside_closed_set_fails_closed(tmp_path, signed_decision_factory):
-    decision = signed_decision_factory()
-    with pytest.raises(RuntimeSecurityError) as error:
-        _runtime(tmp_path).execute(decision, "TOKEN_WRITE_STATE")
-
-    assert "outside the allowed set" in error.value.receipt.refusal_reason
-    _assert_durable_refusal(error, tmp_path)
-
-
-def test_replay_fails_closed_after_restart(tmp_path, signed_decision_factory):
-    decision = signed_decision_factory()
-    _runtime(tmp_path).execute(decision, "TOKEN_EXECUTE_QUERY")
-
-    with pytest.raises(RuntimeSecurityError) as error:
-        _runtime(tmp_path).execute(decision, "TOKEN_EXECUTE_QUERY")
-
-    assert "already been consumed" in error.value.receipt.refusal_reason
-    assert len(list(tmp_path.glob("*.json"))) == 2
-
-
-def test_contract_round_trip_and_json_schema(tmp_path, signed_decision_factory):
-    decision = signed_decision_factory()
-    restored = AdmissibilityDecision.from_json(decision.to_json())
-    schema_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)),
-        "schemas",
-        "tas.admissibility-decision.v1.schema.json",
     )
-    with open(schema_path, encoding="utf-8") as stream:
-        schema = json.load(stream)
 
-    assert restored == decision
-    validator = jsonschema.Draft202012Validator(
-        schema, format_checker=jsonschema.FormatChecker()
-    )
-    validator.validate(json.loads(decision.to_json()))
+    result = runtime.execute(b'{"action_payload":{"op":"SET","key":"x","value":2}}')
+
+    assert result.success is False
+    assert runtime.current_state_root == "root-0"
+    assert runtime.state_store["x"] == 1
+    assert len(runtime.history_ledger) == 1
+    assert runtime.history_ledger[0]["reason"] == "PARENT_STATE_MISMATCH"

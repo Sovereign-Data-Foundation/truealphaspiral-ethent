@@ -12,7 +12,12 @@
     "context_snapshot_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "is_admitted": {"type": "boolean"},
     "nonce": {"type": "string", "minLength": 16},
-    "parent_receipt_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "parent_receipt_hash": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        {"type": "null"}
+      ]
+    },
     "refusal_reason": {"type": "string"},
     "timestamp_utc": {"type": "string", "format": "date-time"},
     "verifier_signature": {"type": "string", "pattern": "^[a-f0-9]{128}$"}

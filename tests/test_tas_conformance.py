@@ -118,6 +118,22 @@ def test_nonce_is_consumed_even_when_replayed_with_same_allocation(tmp_path):
             total=7,
             allocations=[{"recipient": "alice", "amount": 7}],
         )
+    with pytest.raises(TransitionRejected, match="UInt64"):
+        fixture[-1].consume(
+            "nonce-3",
+            "tas:default",
+            expected_balance=3,
+            total=-1,
+            allocations=[{"recipient": "alice", "amount": 0}],
+        )
+    with pytest.raises(TransitionRejected, match="exceeds"):
+        fixture[-1].consume(
+            "nonce-4",
+            "tas:default",
+            expected_balance=3,
+            total=4,
+            allocations=[{"recipient": "alice", "amount": 4}],
+        )
     assert fixture[-1].get_balance("tas:default") == 3
 
     with pytest.raises(ReplayRejected):

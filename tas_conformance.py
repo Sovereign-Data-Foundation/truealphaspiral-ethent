@@ -120,6 +120,33 @@ def normalize_cvp(value: Any) -> dict[str, list[str]]:
     }
 
 
+def _normalize_allocations(allocations: Any) -> list[dict[str, Any]]:
+    if not isinstance(allocations, list):
+        raise TransitionRejected("allocations must be a list")
+    normalized = []
+    for allocation in allocations:
+        if not isinstance(allocation, dict) or set(allocation) != {
+            "recipient",
+            "amount",
+        }:
+            raise TransitionRejected("allocation fields are invalid")
+        recipient = allocation["recipient"]
+        if not isinstance(recipient, str):
+            raise TransitionRejected("allocation recipient must be a string")
+        recipient = unicodedata.normalize("NFC", recipient.strip())
+        if not recipient:
+            raise TransitionRejected("allocation recipient cannot be empty")
+        normalized.append(
+            {
+                "recipient": recipient,
+                "amount": _uint64(allocation["amount"], "allocation amount"),
+            }
+        )
+    if len({allocation["recipient"] for allocation in normalized}) != len(normalized):
+        raise TransitionRejected("allocation recipients must be unique")
+    return sorted(normalized, key=lambda allocation: allocation["recipient"])
+
+
 def _normalize_statement(statement: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(statement, Mapping) or set(statement) != _STATEMENT_FIELDS:
         raise TransitionRejected("authorization statement fields are invalid")
@@ -136,33 +163,7 @@ def _normalize_statement(statement: Mapping[str, Any]) -> dict[str, Any]:
     if not ledger_account:
         raise TransitionRejected("ledger account cannot be empty")
     cvp = normalize_cvp(statement["cvp"])
-    allocations = statement["allocations"]
-    if not isinstance(allocations, list):
-        raise TransitionRejected("allocations must be a list")
-    normalized_allocations = []
-    for allocation in allocations:
-        if not isinstance(allocation, dict) or set(allocation) != {
-            "recipient",
-            "amount",
-        }:
-            raise TransitionRejected("allocation fields are invalid")
-        recipient = allocation["recipient"]
-        if not isinstance(recipient, str):
-            raise TransitionRejected("allocation recipient must be a string")
-        recipient = unicodedata.normalize("NFC", recipient.strip())
-        if not recipient:
-            raise TransitionRejected("allocation recipient cannot be empty")
-        normalized_allocations.append(
-            {
-                "recipient": recipient,
-                "amount": _uint64(allocation["amount"], "allocation amount"),
-            }
-        )
-    if len({a["recipient"] for a in normalized_allocations}) != len(
-        normalized_allocations
-    ):
-        raise TransitionRejected("allocation recipients must be unique")
-    normalized_allocations.sort(key=lambda allocation: allocation["recipient"])
+    normalized_allocations = _normalize_allocations(statement["allocations"])
     return {
         "epoch": epoch,
         "nonce": nonce,
@@ -267,7 +268,24 @@ class SQLiteEscrow:
         total: int,
         allocations: Sequence[Mapping[str, Any]],
     ) -> str:
-        digest = allocation_digest(allocations)
+        if not isinstance(nonce, str) or not nonce or len(nonce) > 256:
+            raise TransitionRejected("nonce must contain 1 to 256 characters")
+        account = unicodedata.normalize("NFC", account.strip())
+        if not account:
+            raise TransitionRejected("ledger account cannot be empty")
+        expected_balance = _uint64(expected_balance, "expected ledger balance")
+        total = _uint64(total, "settlement total")
+        if total > expected_balance:
+            raise TransitionRejected("settlement exceeds the ledger balance")
+        normalized_allocations = _normalize_allocations(list(allocations))
+        allocated = 0
+        for allocation in normalized_allocations:
+            allocated += allocation["amount"]
+            if allocated > UINT64_MAX:
+                raise TransitionRejected("allocation sum overflows UInt64")
+        if allocated != total:
+            raise TransitionRejected("allocations do not conserve the declared total")
+        digest = allocation_digest(normalized_allocations)
         with sqlite3.connect(self.path, timeout=30, isolation_level=None) as connection:
             connection.execute("PRAGMA busy_timeout = 30000")
             connection.execute("BEGIN IMMEDIATE")

@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 UINT64_MAX = (1 << 64) - 1
+SQLITE_INT_MAX = (1 << 63) - 1
 AUTHORIZATION_DOMAIN = b"TAS-CONFORMANCE-AUTHORIZATION-V0.8\x00"
 SPARSE_LEAF_DOMAIN = b"\x00"
 SPARSE_NODE_DOMAIN = b"\x01"
@@ -28,6 +29,7 @@ _STATEMENT_FIELDS = {
     "total",
     "ledger_account",
     "ledger_balance",
+    "expected_state_version",
 }
 
 
@@ -73,6 +75,12 @@ def canonical_json(value: Any) -> bytes:
 def _uint64(value: Any, label: str) -> int:
     if type(value) is not int or not 0 <= value <= UINT64_MAX:
         raise TransitionRejected(f"{label} is outside UInt64")
+    return value
+
+
+def _sqlite_integer(value: Any, label: str) -> int:
+    if type(value) is not int or not 0 <= value <= SQLITE_INT_MAX:
+        raise TransitionRejected(f"{label} is outside SQLite's nonnegative INTEGER range")
     return value
 
 
@@ -172,6 +180,9 @@ def _normalize_statement(statement: Mapping[str, Any]) -> dict[str, Any]:
         "total": _uint64(statement["total"], "total"),
         "ledger_account": ledger_account,
         "ledger_balance": _uint64(statement["ledger_balance"], "ledger balance"),
+        "expected_state_version": _sqlite_integer(
+            statement["expected_state_version"], "expected state version"
+        ),
     }
 
 
@@ -212,38 +223,90 @@ class SQLiteEscrow:
         self.path = str(path)
         with sqlite3.connect(self.path) as connection:
             connection.execute(
-                """CREATE TABLE IF NOT EXISTS escrow (
-                    nonce TEXT PRIMARY KEY,
-                    allocation_digest TEXT NOT NULL
+                """CREATE TABLE IF NOT EXISTS escrow_account_state (
+                    account_id TEXT PRIMARY KEY,
+                    authoritative_balance INTEGER NOT NULL
+                        CHECK (authoritative_balance >= 0),
+                    state_version INTEGER NOT NULL CHECK (state_version >= 0)
                 )"""
             )
-            connection.execute(
-                """CREATE TABLE IF NOT EXISTS ledger_balances (
-                    account TEXT PRIMARY KEY,
-                    balance TEXT NOT NULL
-                )"""
-            )
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(escrow)")
+            }
+            if columns and "expected_state_version" not in columns:
+                connection.execute("ALTER TABLE escrow RENAME TO escrow_legacy")
+                columns = set()
+            if not columns:
+                connection.execute(
+                    """CREATE TABLE escrow (
+                        nonce TEXT PRIMARY KEY,
+                        allocation_digest TEXT NOT NULL,
+                        account_id TEXT NOT NULL,
+                        expected_state_version INTEGER NOT NULL
+                            CHECK (expected_state_version >= 0),
+                        debited_amount INTEGER NOT NULL
+                            CHECK (debited_amount >= 0),
+                        post_balance INTEGER NOT NULL CHECK (post_balance >= 0),
+                        authorization_digest TEXT NOT NULL
+                    )"""
+                )
+            legacy = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'escrow_legacy'"
+            ).fetchone()
+            if legacy:
+                connection.execute(
+                    """INSERT OR IGNORE INTO escrow (
+                        nonce, allocation_digest, account_id,
+                        expected_state_version, debited_amount, post_balance,
+                        authorization_digest
+                    )
+                    SELECT nonce, allocation_digest, '', 0, 0, 0, ''
+                    FROM escrow_legacy"""
+                )
+                connection.execute("DROP TABLE escrow_legacy")
+            old_balance_table = connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'ledger_balances'"
+            ).fetchone()
+            if old_balance_table:
+                for account, balance in connection.execute(
+                    "SELECT account, balance FROM ledger_balances"
+                ):
+                    balance = int(balance)
+                    _sqlite_integer(balance, "migrated ledger balance")
+                    connection.execute(
+                        """INSERT OR IGNORE INTO escrow_account_state
+                        (account_id, authoritative_balance, state_version)
+                        VALUES (?, ?, 0)""",
+                        (account, balance),
+                    )
 
-    def initialize_balance(self, account: str, balance: int) -> None:
+    def initialize_balance(
+        self, account: str, balance: int, state_version: int = 0
+    ) -> None:
         account = unicodedata.normalize("NFC", account.strip())
         if not account:
             raise TransitionRejected("ledger account cannot be empty")
-        balance = _uint64(balance, "initial ledger balance")
+        balance = _sqlite_integer(balance, "initial authoritative balance")
+        state_version = _sqlite_integer(state_version, "initial state version")
         with sqlite3.connect(
             self.path, timeout=30, isolation_level=None
         ) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
                 connection.execute(
-                    "INSERT OR IGNORE INTO ledger_balances (account, balance) "
-                    "VALUES (?, ?)",
-                    (account, str(balance)),
+                    """INSERT OR IGNORE INTO escrow_account_state (
+                        account_id, authoritative_balance, state_version
+                    ) VALUES (?, ?, ?)""",
+                    (account, balance, state_version),
                 )
                 row = connection.execute(
-                    "SELECT balance FROM ledger_balances WHERE account = ?",
+                    """SELECT authoritative_balance, state_version
+                    FROM escrow_account_state WHERE account_id = ?""",
                     (account,),
                 ).fetchone()
-                if row is None or int(row[0]) != balance:
+                if row is None or row != (balance, state_version):
                     raise TransitionRejected(
                         "ledger account is already initialized differently"
                     )
@@ -252,31 +315,54 @@ class SQLiteEscrow:
                 connection.rollback()
                 raise
 
-    def get_balance(self, account: str) -> int | None:
+    def get_account_state(self, account: str) -> tuple[int, int] | None:
         with sqlite3.connect(self.path) as connection:
             row = connection.execute(
-                "SELECT balance FROM ledger_balances WHERE account = ?",
+                """SELECT authoritative_balance, state_version
+                FROM escrow_account_state WHERE account_id = ?""",
                 (unicodedata.normalize("NFC", account.strip()),),
             ).fetchone()
-        return None if row is None else int(row[0])
+        return None if row is None else (row[0], row[1])
+
+    def get_balance(self, account: str) -> int | None:
+        state = self.get_account_state(account)
+        return None if state is None else state[0]
 
     def consume(
         self,
         nonce: str,
         account: str,
+        expected_state_version: int,
         expected_balance: int,
         total: int,
         allocations: Sequence[Mapping[str, Any]],
+        authorization_digest: str,
     ) -> str:
         if not isinstance(nonce, str) or not nonce or len(nonce) > 256:
             raise TransitionRejected("nonce must contain 1 to 256 characters")
         account = unicodedata.normalize("NFC", account.strip())
         if not account:
             raise TransitionRejected("ledger account cannot be empty")
-        expected_balance = _uint64(expected_balance, "expected ledger balance")
-        total = _uint64(total, "settlement total")
+        expected_state_version = _sqlite_integer(
+            expected_state_version, "expected state version"
+        )
+        expected_balance = _sqlite_integer(
+            expected_balance, "expected ledger balance"
+        )
+        total = _sqlite_integer(total, "settlement total")
         if total > expected_balance:
             raise TransitionRejected("settlement exceeds the ledger balance")
+        if expected_state_version == SQLITE_INT_MAX:
+            raise TransitionRejected("state version cannot be incremented")
+        if (
+            not isinstance(authorization_digest, str)
+            or len(authorization_digest) != 64
+        ):
+            raise TransitionRejected("authorization digest must be SHA-256 hex")
+        try:
+            bytes.fromhex(authorization_digest)
+        except ValueError as error:
+            raise TransitionRejected("authorization digest must be SHA-256 hex") from error
         normalized_allocations = _normalize_allocations(list(allocations))
         allocated = 0
         for allocation in normalized_allocations:
@@ -295,24 +381,46 @@ class SQLiteEscrow:
                 ).fetchone():
                     raise ReplayRejected("authorization nonce was already consumed")
                 row = connection.execute(
-                    "SELECT balance FROM ledger_balances WHERE account = ?",
+                    """SELECT authoritative_balance, state_version
+                    FROM escrow_account_state WHERE account_id = ?""",
                     (account,),
                 ).fetchone()
-                if row is None or int(row[0]) != expected_balance:
-                    raise TransitionRejected(
-                        "ledger balance is uninitialized or stale"
-                    )
+                if row is None:
+                    raise TransitionRejected("ledger account is uninitialized")
+                authoritative_balance, state_version = row
+                if state_version != expected_state_version:
+                    raise TransitionRejected("stale state version")
+                if authoritative_balance != expected_balance:
+                    raise TransitionRejected("stale ledger balance")
+                if total > authoritative_balance:
+                    raise TransitionRejected("settlement exceeds authoritative balance")
+                post_balance = authoritative_balance - total
                 connection.execute(
-                    "INSERT INTO escrow (nonce, allocation_digest) VALUES (?, ?)",
-                    (nonce, digest),
+                    """INSERT INTO escrow (
+                        nonce, allocation_digest, account_id,
+                        expected_state_version, debited_amount, post_balance,
+                        authorization_digest
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        nonce,
+                        digest,
+                        account,
+                        expected_state_version,
+                        total,
+                        post_balance,
+                        authorization_digest,
+                    ),
                 )
                 updated = connection.execute(
-                    "UPDATE ledger_balances SET balance = ? "
-                    "WHERE account = ? AND balance = ?",
-                    (str(expected_balance - total), account, str(expected_balance)),
+                    """UPDATE escrow_account_state
+                    SET authoritative_balance = authoritative_balance - ?,
+                        state_version = state_version + 1
+                    WHERE account_id = ? AND state_version = ?
+                        AND authoritative_balance = ?""",
+                    (total, account, expected_state_version, authoritative_balance),
                 )
                 if updated.rowcount != 1:
-                    raise TransitionRejected("ledger balance changed during escrow")
+                    raise TransitionRejected("stale account state during escrow")
                 connection.commit()
             except sqlite3.IntegrityError as error:
                 connection.rollback()
@@ -375,12 +483,15 @@ def apply_authorized_transition(
     digest = escrow.consume(
         normalized["nonce"],
         normalized["ledger_account"],
+        normalized["expected_state_version"],
         balance,
         total,
         normalized["allocations"],
+        hashlib.sha256(AUTHORIZATION_DOMAIN + encoded).hexdigest(),
     )
     return {
         "allocation_digest": digest,
         "ledger_balance": balance - total,
+        "state_version": normalized["expected_state_version"] + 1,
         "state": MergeState(frozenset(permissions), frozenset(obligations)),
     }

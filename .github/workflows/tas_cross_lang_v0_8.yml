@@ -26,7 +26,7 @@ jobs:
       - name: Set up Lean 4.11.0
         uses: leanprover/lean-action@v1
         with:
-          lean-version: "4.11.0"
+          lake-package-directory: lean
       - name: Build Lean arithmetic checker
         working-directory: lean
         run: lake build

@@ -3,9 +3,11 @@
 `apply_authorized_transition` accepts only an Ed25519 statement signed by a
 configured trusted epoch key, and requires a 256-level sparse proof of that
 same canonical statement under the caller-configured SMT root. It applies the
-permission meet and obligation join before writing the allocation digest and
-nonce to SQLite in one transaction. A nonce can be consumed only once, even
-when a later request repeats the same allocation. Callers must supply the
+permission meet and obligation join, then atomically compares and debits the
+persisted account balance while writing the allocation digest and nonce to
+SQLite. Balances are stored as decimal text so the full UInt64 range is
+preserved. An account must be initialized by trusted setup before transitions;
+stale balances and consumed nonces are rejected. Callers must supply the
 trusted epoch-key map and configured root from their external trust
 configuration; neither is inferred from the statement.
 

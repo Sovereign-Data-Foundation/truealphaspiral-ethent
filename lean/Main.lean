@@ -1,4 +1,5 @@
 import Lean
+import Reaction
 
 def uint64Max : Nat := 18446744073709551615
 
@@ -31,22 +32,75 @@ def checkVector (line : String) : Except String Bool := do
         valid == expectedValid &&
         after == expectedAfter
       )
-  | _ => .error "vector row must contain eight comma-separated fields"
+  | _ => .error "settlement row must contain eight comma-separated fields"
+
+def checkLedgerVector (line : String) : Except String Bool := do
+  match line.splitOn "," with
+  | [name, account, preBalanceText, preVersionText, tokenVersionText,
+      ledgerBalanceText, debitText, status, expectedBalanceText, expectedVersionText] => do
+      let preBalance ← parseNatField s!"{name}.pre_balance" preBalanceText
+      let preVersion ← parseNatField s!"{name}.pre_state_version" preVersionText
+      let tokenVersion ← parseNatField s!"{name}.token_state_version" tokenVersionText
+      let ledgerBalance ← parseNatField s!"{name}.ledger_balance" ledgerBalanceText
+      let debit ← parseNatField s!"{name}.total_debit" debitText
+      let expectedBalance ← parseNatField s!"{name}.expected_balance" expectedBalanceText
+      let expectedVersion ← parseNatField s!"{name}.expected_state_version" expectedVersionText
+      let state : AccountState := {
+        accountId := account
+        authoritativeBalance := preBalance
+        stateVersion := preVersion
+      }
+      let token : SettlementToken := {
+        accountId := account
+        expectedStateVersion := tokenVersion
+        ledgerBalance := ledgerBalance
+        totalDebit := debit
+      }
+      if status == "COMMITTED" then
+        match applySettlement state token with
+        | some result =>
+            pure (
+              result.authoritativeBalance == expectedBalance &&
+              result.stateVersion == expectedVersion
+            )
+        | none => pure false
+      else if status == "REFUSED" then
+        match applySettlement state token with
+        | none =>
+            pure (expectedBalance == preBalance && expectedVersion == preVersion)
+        | some _ => pure false
+      else
+        pure false
+  | _ => .error "ledger row must contain ten comma-separated fields"
 
 def main : IO Unit := do
   let args ← IO.getArgs
-  let path ← match args with
-    | [file] => pure file
-    | _ => throw <| IO.userError "usage: lake exe tas_vectors <vector.csv>"
-  let contents ← IO.FS.readFile path
-  let rows := (contents.splitOn "\n").drop 1 |>.filter (· != "")
-  if rows.length != 14 then
-    throw <| IO.userError s!"expected 14 vectors, found {rows.length}"
-  for row in rows do
+  let paths ← match args with
+    | [arithmeticFile, ledgerFile] => pure (arithmeticFile, ledgerFile)
+    | _ => throw <| IO.userError
+      "usage: lake exe tas_vectors <settlement.csv> <ledger.csv>"
+  let arithmeticContents ← IO.FS.readFile paths.1
+  let arithmeticRows :=
+    (arithmeticContents.splitOn "\n").drop 1 |>.filter (· != "")
+  if arithmeticRows.length != 14 then
+    throw <| IO.userError s!"expected 14 arithmetic vectors, found {arithmeticRows.length}"
+  for row in arithmeticRows do
     match checkVector row with
     | .ok true => pure ()
     | .ok false =>
-        throw <| IO.userError s!"vector failed: {row}"
+        throw <| IO.userError s!"settlement vector failed: {row}"
     | .error message =>
-        throw <| IO.userError s!"invalid vector ({message}): {row}"
-  IO.println s!"{rows.length} shared TAS arithmetic vectors passed"
+        throw <| IO.userError s!"invalid settlement vector ({message}): {row}"
+
+  let ledgerContents ← IO.FS.readFile paths.2
+  let ledgerRows := (ledgerContents.splitOn "\n").drop 1 |>.filter (· != "")
+  if ledgerRows.isEmpty then
+    throw <| IO.userError "no optimistic escrow vectors were supplied"
+  for row in ledgerRows do
+    match checkLedgerVector row with
+    | .ok true => pure ()
+    | .ok false =>
+        throw <| IO.userError s!"optimistic escrow vector failed: {row}"
+    | .error message =>
+        throw <| IO.userError s!"invalid ledger vector ({message}): {row}"
+  IO.println s!"{arithmeticRows.length} settlement and {ledgerRows.length} optimistic escrow vectors passed"

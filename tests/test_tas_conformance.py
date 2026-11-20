@@ -17,12 +17,14 @@ from tas_conformance import (
     MergeState,
     ReplayRejected,
     SQLiteEscrow,
+    Settlement,
     SparseProof,
     TransitionRejected,
     _normalize_statement,
     allocation_digest,
     apply_authorized_transition,
     canonical_json,
+    settle_u64,
     sparse_root,
 )
 
@@ -35,6 +37,7 @@ def _authorized_fixture(path, **updates):
     statement = {
         "epoch": 9,
         "nonce": "nonce-1",
+        "ledger_account": "tas:default",
         "cvp": {
             "permissions": ["read", "write"],
             "obligations": ["retain"],
@@ -54,6 +57,8 @@ def _authorized_fixture(path, **updates):
     public_key = private_key.public_key().public_bytes(
         Encoding.Raw, PublicFormat.Raw
     )
+    escrow = SQLiteEscrow(path)
+    escrow.initialize_balance(statement["ledger_account"], statement["ledger_balance"])
     return (
         statement,
         signature,
@@ -61,7 +66,7 @@ def _authorized_fixture(path, **updates):
         {9: public_key},
         sparse_root(proof),
         MergeState(frozenset({"read", "write"}), frozenset({"retain"})),
-        SQLiteEscrow(path),
+        escrow,
     )
 
 
@@ -89,6 +94,7 @@ def test_authorized_transition_verifies_proof_and_merges_lattices(tmp_path):
     assert result["state"] == MergeState(
         frozenset({"read", "write"}), frozenset({"retain"})
     )
+    assert fixture[-1].get_balance("tas:default") == 3
     assert len(result["allocation_digest"]) == 64
 
 
@@ -104,6 +110,15 @@ def test_nonce_is_consumed_even_when_replayed_with_same_allocation(tmp_path):
     assert consumed_digest == allocation_digest(
         _normalize_statement(fixture[0])["allocations"]
     )
+    with pytest.raises(TransitionRejected, match="stale"):
+        fixture[-1].consume(
+            "nonce-2",
+            "tas:default",
+            expected_balance=10,
+            total=7,
+            allocations=[{"recipient": "alice", "amount": 7}],
+        )
+    assert fixture[-1].get_balance("tas:default") == 3
 
     with pytest.raises(ReplayRejected):
         _apply(fixture)
@@ -166,6 +181,20 @@ def test_obligations_and_uint64_conservation_fail_closed(tmp_path):
         _apply(overflow)
 
 
+def test_authorized_transition_preserves_full_uint64_balance(tmp_path):
+    fixture = _authorized_fixture(
+        tmp_path / "u64.sqlite",
+        allocations=[{"recipient": "alice", "amount": UINT64_MAX}],
+        total=UINT64_MAX,
+        ledger_balance=UINT64_MAX,
+    )
+
+    result = _apply(fixture)
+
+    assert result["ledger_balance"] == 0
+    assert fixture[-1].get_balance("tas:default") == 0
+
+
 def test_python_consumes_all_shared_settlement_vectors():
     with (ROOT / "vectors" / "tas_cross_lang_v0_8.csv").open(
         newline="", encoding="utf-8"
@@ -174,14 +203,12 @@ def test_python_consumes_all_shared_settlement_vectors():
 
     assert len(rows) == 14
     for row in rows:
-        gross = int(row["gross"])
-        fee_bps = int(row["fee_bps"])
-        balance = int(row["balance"])
-        fee = gross * fee_bps // 10_000
-        net = gross - fee
-        valid = gross <= balance
-        after = balance - gross if valid else 0
-        assert (fee, net, valid, after) == (
+        settlement = settle_u64(
+            int(row["gross"]),
+            int(row["fee_bps"]),
+            int(row["balance"]),
+        )
+        assert settlement == Settlement(
             int(row["expected_fee"]),
             int(row["expected_net"]),
             row["expected_valid"] == "true",

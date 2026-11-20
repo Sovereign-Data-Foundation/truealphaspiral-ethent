@@ -26,6 +26,7 @@ _STATEMENT_FIELDS = {
     "cvp",
     "allocations",
     "total",
+    "ledger_account",
     "ledger_balance",
 }
 
@@ -51,6 +52,14 @@ class MergeState:
     obligations: frozenset[str]
 
 
+@dataclass(frozen=True)
+class Settlement:
+    fee: int
+    net: int
+    valid: bool
+    balance_after: int
+
+
 def canonical_json(value: Any) -> bytes:
     return json.dumps(
         value,
@@ -65,6 +74,21 @@ def _uint64(value: Any, label: str) -> int:
     if type(value) is not int or not 0 <= value <= UINT64_MAX:
         raise TransitionRejected(f"{label} is outside UInt64")
     return value
+
+
+def settle_u64(gross: int, fee_bps: int, balance: int) -> Settlement:
+    gross = _uint64(gross, "gross settlement")
+    balance = _uint64(balance, "ledger balance")
+    if type(fee_bps) is not int or not 0 <= fee_bps <= 10_000:
+        raise TransitionRejected("fee basis points must be in [0, 10000]")
+    fee = gross * fee_bps // 10_000
+    valid = gross <= balance
+    return Settlement(
+        fee=fee,
+        net=gross - fee,
+        valid=valid,
+        balance_after=balance - gross if valid else 0,
+    )
 
 
 def _normalized_identifiers(values: Any, label: str) -> list[str]:
@@ -105,6 +129,12 @@ def _normalize_statement(statement: Mapping[str, Any]) -> dict[str, Any]:
     nonce = statement["nonce"]
     if not isinstance(nonce, str) or not nonce or len(nonce) > 256:
         raise TransitionRejected("nonce must contain 1 to 256 characters")
+    ledger_account = statement["ledger_account"]
+    if not isinstance(ledger_account, str):
+        raise TransitionRejected("ledger account must be a string")
+    ledger_account = unicodedata.normalize("NFC", ledger_account.strip())
+    if not ledger_account:
+        raise TransitionRejected("ledger account cannot be empty")
     cvp = normalize_cvp(statement["cvp"])
     allocations = statement["allocations"]
     if not isinstance(allocations, list):
@@ -139,6 +169,7 @@ def _normalize_statement(statement: Mapping[str, Any]) -> dict[str, Any]:
         "cvp": cvp,
         "allocations": normalized_allocations,
         "total": _uint64(statement["total"], "total"),
+        "ledger_account": ledger_account,
         "ledger_balance": _uint64(statement["ledger_balance"], "ledger balance"),
     }
 
@@ -185,17 +216,85 @@ class SQLiteEscrow:
                     allocation_digest TEXT NOT NULL
                 )"""
             )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS ledger_balances (
+                    account TEXT PRIMARY KEY,
+                    balance TEXT NOT NULL
+                )"""
+            )
 
-    def consume(self, nonce: str, allocations: Sequence[Mapping[str, Any]]) -> str:
+    def initialize_balance(self, account: str, balance: int) -> None:
+        account = unicodedata.normalize("NFC", account.strip())
+        if not account:
+            raise TransitionRejected("ledger account cannot be empty")
+        balance = _uint64(balance, "initial ledger balance")
+        with sqlite3.connect(
+            self.path, timeout=30, isolation_level=None
+        ) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute(
+                    "INSERT OR IGNORE INTO ledger_balances (account, balance) "
+                    "VALUES (?, ?)",
+                    (account, str(balance)),
+                )
+                row = connection.execute(
+                    "SELECT balance FROM ledger_balances WHERE account = ?",
+                    (account,),
+                ).fetchone()
+                if row is None or int(row[0]) != balance:
+                    raise TransitionRejected(
+                        "ledger account is already initialized differently"
+                    )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+
+    def get_balance(self, account: str) -> int | None:
+        with sqlite3.connect(self.path) as connection:
+            row = connection.execute(
+                "SELECT balance FROM ledger_balances WHERE account = ?",
+                (unicodedata.normalize("NFC", account.strip()),),
+            ).fetchone()
+        return None if row is None else int(row[0])
+
+    def consume(
+        self,
+        nonce: str,
+        account: str,
+        expected_balance: int,
+        total: int,
+        allocations: Sequence[Mapping[str, Any]],
+    ) -> str:
         digest = allocation_digest(allocations)
         with sqlite3.connect(self.path, timeout=30, isolation_level=None) as connection:
             connection.execute("PRAGMA busy_timeout = 30000")
             connection.execute("BEGIN IMMEDIATE")
             try:
+                if connection.execute(
+                    "SELECT 1 FROM escrow WHERE nonce = ?", (nonce,)
+                ).fetchone():
+                    raise ReplayRejected("authorization nonce was already consumed")
+                row = connection.execute(
+                    "SELECT balance FROM ledger_balances WHERE account = ?",
+                    (account,),
+                ).fetchone()
+                if row is None or int(row[0]) != expected_balance:
+                    raise TransitionRejected(
+                        "ledger balance is uninitialized or stale"
+                    )
                 connection.execute(
                     "INSERT INTO escrow (nonce, allocation_digest) VALUES (?, ?)",
                     (nonce, digest),
                 )
+                updated = connection.execute(
+                    "UPDATE ledger_balances SET balance = ? "
+                    "WHERE account = ? AND balance = ?",
+                    (str(expected_balance - total), account, str(expected_balance)),
+                )
+                if updated.rowcount != 1:
+                    raise TransitionRejected("ledger balance changed during escrow")
                 connection.commit()
             except sqlite3.IntegrityError as error:
                 connection.rollback()
@@ -255,7 +354,13 @@ def apply_authorized_transition(
     if total > balance:
         raise TransitionRejected("settlement exceeds the ledger balance")
 
-    digest = escrow.consume(normalized["nonce"], normalized["allocations"])
+    digest = escrow.consume(
+        normalized["nonce"],
+        normalized["ledger_account"],
+        balance,
+        total,
+        normalized["allocations"],
+    )
     return {
         "allocation_digest": digest,
         "ledger_balance": balance - total,

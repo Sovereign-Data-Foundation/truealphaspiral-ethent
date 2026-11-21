@@ -130,11 +130,28 @@ else:
 
 At least 256 iterations are mandatory. The terminal result is `N[256]`.
 
-The canonical wire encoding of a non-zero revocation value and its
-`DOM_ENTRY` preimage are not yet ratified. `V != Z[0]` therefore establishes
-revocation only after a valid reconstruction; it does not establish a
-revocation-record schema. Implementations must not infer or invent a
-`DOM_ENTRY` structure until a dedicated specification update is ratified.
+For a non-zero leaf, the canonical revocation value is the 32-byte digest:
+
+```text
+V = SHA256(0x03 || JCS(
+  {
+    "issuer": I,
+    "capability_id": C,
+    "epoch": E,
+    "revoked_at": RFC3339,
+    "reason_code": STRING
+  }
+))
+```
+
+- `0x03` is the `DOM_ENTRY` domain prefix.
+- `JCS` is UTF-8 JCS-compatible JSON with sorted object keys, absent
+  whitespace outside strings, and no non-finite numbers.
+- `epoch` is a JSON unsigned integer.
+- `revoked_at` is an RFC 3339 UTC timestamp ending in `Z`.
+- `reason_code` is a non-empty UTF-8 string.
+- `V != Z[0]` establishes a populated revocation leaf only after successful
+  reconstruction against the authenticated epoch root.
 
 #### 6. Authenticated-root comparison
 
@@ -202,20 +219,19 @@ Hexadecimal encodings below use lower-case 32-byte digests.
 
 **Vector 5: positive revocation leaf**
 
-The following vector uses `0x01^{32}` only as a 32-byte test sentinel. The
-canonical `DOM_ENTRY` revocation value is unresolved and must not be inferred
-from this sentinel.
-
 - Issuer: `did:tas:root:test`
 - Capability: `cap:exec:001`
 - Derived key:
   `d2e6084c18986cadb4faea9fae40111940a3eebd4c389cb0bc62a196e680ea08`
-- `V`: `0101010101010101010101010101010101010101010101010101010101010101`
+- Canonical entry fields:
+  - `epoch`: `9`
+  - `revoked_at`: `2026-11-21T00:00:00Z`
+  - `reason_code`: `ADMINISTRATIVE_REVOCATION`
+- `V`:
+  `d594e5429dd041fa933f2ace370e492c36699b5a5b9eea1ae5d347732a9728d1`
 - `M`: `ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff`
-- `S`: concatenation of `Z[0]` through `Z[255]`, where each `Z[d]` is obtained
-  by the inherited recurrence.
-- `N[0]`:
-  `e36b2bff469b217541c0f49e8c987f31045c2518c8cb86ca339a42dcb3dc26bb`
+- `S`: concatenation of 256 siblings where sibling `d` equals
+  `SHA256("TAS-SMT-KAT-SIBLING" || uint32be(d))`.
 - Terminal root:
-  `06255444de3296aeea58a297efbf993db35a2925b29100ce4a005453660d1c77`
+  `a98718417068f3a5223fd8d1c98e274e6e2857092c2bb9ef410251972203123e`
 - Expected: if that terminal root is `E.smt_root`, the verdict is `REVOKED`.

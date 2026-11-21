@@ -9,7 +9,7 @@ def parseNatField (label value : String) : Except String Nat :=
   | none => .error s!"{label} is not a natural number"
 
 def checkVector (line : String) : Except String Bool := do
-  match line.splitOn "," with
+  match line.trim.splitOn "," with
   | [name, grossText, feeBpsText, balanceText, feeText, netText, validText, afterText] => do
       let gross ← parseNatField s!"{name}.gross" grossText
       let feeBps ← parseNatField s!"{name}.fee_bps" feeBpsText
@@ -35,7 +35,7 @@ def checkVector (line : String) : Except String Bool := do
   | _ => .error "settlement row must contain eight comma-separated fields"
 
 def checkLedgerVector (line : String) : Except String Bool := do
-  match line.splitOn "," with
+  match line.trim.splitOn "," with
   | [name, account, preBalanceText, preVersionText, tokenVersionText,
       ledgerBalanceText, debitText, status, expectedBalanceText, expectedVersionText] => do
       let preBalance ← parseNatField s!"{name}.pre_balance" preBalanceText
@@ -73,12 +73,10 @@ def checkLedgerVector (line : String) : Except String Bool := do
         pure false
   | _ => .error "ledger row must contain ten comma-separated fields"
 
-def main : IO Unit := do
-  let args ← IO.getArgs
+def main (args : List String) : IO Unit := do
   let paths ← match args with
     | [arithmeticFile, ledgerFile] => pure (arithmeticFile, ledgerFile)
-    | _ => throw <| IO.userError
-      "usage: lake exe tas_vectors <settlement.csv> <ledger.csv>"
+    | _ => throw <| IO.userError "usage: lake exe tas_vectors <settlement.csv> <ledger.csv>"
   let arithmeticContents ← IO.FS.readFile paths.1
   let arithmeticRows :=
     (arithmeticContents.splitOn "\n").drop 1 |>.filter (· != "")

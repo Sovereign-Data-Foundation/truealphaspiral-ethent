@@ -197,6 +197,12 @@ role separation, dual-predicate admissibility law, receipt wire preimage, and
 fail-closed execution invariants that give these repository rules their runtime
 meaning.
 
+The [Phase 1 admissible generating paths specification](docs/phase-1-admissible-generating-paths.md)
+turns those invariants into an operational transition protocol: continuous
+`A_0` lineage verification, cursive stroke construction, deterministic gate
+evaluation, terminal null collapse, generator containment, and replayable
+admission and refusal receipts.
+
 ## The Book of TAS: A Sovereign Codex
 *The Formal Architecture of Enforceable Intelligence*
 ## 1. Architectural Paradigm: Generative Mimicry vs. Mechanical Integrity

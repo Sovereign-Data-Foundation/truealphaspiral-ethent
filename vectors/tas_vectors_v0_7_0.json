@@ -1,0 +1,42 @@
+{
+  "version": "tas_vectors_v0_7_0",
+  "cases": [
+    {
+      "name": "distinct_nonce_stale_state",
+      "initial": {
+        "account_id": "tas:vector",
+        "authoritative_balance": 10,
+        "state_version": 0
+      },
+      "transitions": [
+        {
+          "nonce": "vector-nonce-1",
+          "expected_state_version": 0,
+          "ledger_balance": 10,
+          "total_debit": 7,
+          "allocations": [{"recipient": "alice", "amount": 7}],
+          "expected_status": "COMMITTED",
+          "expected_balance": 3,
+          "expected_state_version_after": 1,
+          "expected_delta_balance": -7,
+          "expected_delta_state_version": 1,
+          "expected_nonce_consumed": true
+        },
+        {
+          "nonce": "vector-nonce-2",
+          "expected_state_version": 0,
+          "ledger_balance": 10,
+          "total_debit": 7,
+          "allocations": [{"recipient": "alice", "amount": 7}],
+          "expected_status": "REFUSED",
+          "expected_reason": "stale_state_version",
+          "expected_balance": 3,
+          "expected_state_version_after": 1,
+          "expected_delta_balance": 0,
+          "expected_delta_state_version": 0,
+          "expected_nonce_consumed": false
+        }
+      ]
+    }
+  ]
+}

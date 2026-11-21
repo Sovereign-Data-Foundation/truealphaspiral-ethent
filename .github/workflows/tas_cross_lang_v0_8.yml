@@ -1,0 +1,35 @@
+name: TAS Cross-Language v0.8 Conformance
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python test requirements
+        run: python -m pip install pytest cryptography
+      - name: Verify Python admission and shared arithmetic
+        run: python -m pytest tests/test_tas_conformance.py -q
+      - name: Verify shared arithmetic and optimistic escrow vectors
+        run: python run_vectors.py --lean-ledger-csv /tmp/tas-ledger-vectors.csv
+      - name: Set up Lean 4.11.0
+        uses: leanprover/lean-action@v1
+        with:
+          lean-version: "4.11.0"
+      - name: Build Lean arithmetic checker
+        working-directory: lean
+        run: lake build
+      - name: Verify shared arithmetic in Lean
+        working-directory: lean
+        run: lake exe tas_vectors ../vectors/tas_cross_lang_v0_8.csv /tmp/tas-ledger-vectors.csv

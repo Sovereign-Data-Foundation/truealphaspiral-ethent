@@ -1,0 +1,221 @@
+# The Lock
+
+## 2. The Lock
+
+### 2.1 Trusted-Root SMT Verification Contract
+
+This drafting contract establishes the inherited defaults for
+`OURSPACE-SMT-SHA256-V1`. Implementations must carry these decisions forward
+without modification.
+
+- `Z[0]` is `0x00^{32}`: 32 zero bytes.
+- `Z[d+1] = SHA256(0x01 || Z[d] || Z[d])`.
+- The corrected empty-tree root is
+  `6155289130893872355eac98042d22aefa2c2e708bea169402760e3b55f9a2dc`.
+- `Z[256]` represents an unpopulated accumulator, not a universally trusted
+  epoch root.
+
+### 2.1.1 Canonical SMT Authentication-Path Reconstruction and Proof Decoding
+
+#### 1. Purpose and upstream dependency
+
+This subsection specifies the normative decoding, canonicalization, and
+256-level root-reconstruction rules for compressed Sparse Merkle Tree (SMT)
+proofs under `OURSPACE-SMT-SHA256-V1`.
+
+An authorization signature authenticates bytes under a public key. It does
+not by itself establish current authority. Authorization is admissible only
+when the capability revocation status is independently reconstructed against
+`E.smt_root`, where `E` is an independently authenticated, non-expired identity
+epoch.
+
+> **Implementation posture.** As of November 21, 2026, PR #114 in
+> `Sovereign-Data-Foundation/TrueAlpha-spiral` models SMT non-inclusion using a
+> caller-supplied root field without 256-level sibling reconstruction. Its Lean
+> proofs are not compiled in the PR. This representation is a non-normative
+> structural abstraction, not a conformant cryptographic verifier.
+
+#### 2. Deterministic capability-index derivation
+
+The verifier must independently derive the 256-bit traversal key `K_C` from
+the authenticated capability envelope:
+
+```text
+L(s) = uint32be(bytes.length(UTF8(s))) || UTF8(s)
+K_C = SHA256(0x02 || L(I) || L(C))
+```
+
+- `I` is the authenticated issuer.
+- `C` is the authenticated capability identifier.
+- `0x02` is the `DOM_INDEX` domain prefix.
+- All lengths are 32-bit unsigned big-endian integers.
+- Caller-supplied proof keys must be rejected or ignored.
+
+#### 3. Key traversal and proof-mask bit ordering
+
+Depth `d` in the inclusive range `0..255` is leaf-adjacent to root-adjacent.
+The frozen key-bit rule is:
+
+```text
+b[d] = (K_C[d / 8] >> (d % 8)) & 0x01
+```
+
+- `b[d] = 0`: `N[d]` is the left child and `s[d]` is the right child.
+- `b[d] = 1`: `N[d]` is the right child and `s[d]` is the left child.
+- `d / 8` is integer division.
+- Both the key and proof mask use byte-array order, with least-significant
+  bit first within each byte.
+
+The proof mask `M` is also a 32-byte little-endian bitset. Bit `d` is:
+
+```text
+M[d] = (M[d / 8] >> (d % 8)) & 0x01
+```
+
+There is no global most-significant-bit-first interpretation.
+
+#### 4. Canonical proof decoding
+
+A compressed proof is:
+
+```text
+P = (V, M, S)
+```
+
+- `V` is exactly 32 bytes.
+- `M` is exactly 32 bytes.
+- `S` is the concatenation of `k = popcount(M)` exactly 32-byte sibling
+  digests.
+
+The decoder must perform these checks before any reconstruction:
+
+1. `V` and `M` must each be exactly 32 bytes.
+2. The length of `S` must equal `32 * popcount(M)`.
+3. Packed siblings must correspond, in ascending depth, only to depths
+   `d` for which `M[d] == 1`.
+4. Every present sibling must satisfy `s[d] != Z[d]`. A default node is not
+   canonical packed sibling data.
+5. `S` must contain no trailing bytes.
+
+Malformed proof structure, length mismatch, explicit default siblings, or
+other anti-aliasing violations return `INVALID`.
+
+#### 5. Leaf encoding and 256-level reconstruction
+
+Initialize `N[0]` as:
+
+```text
+N[0] =
+  Z[0]                         if V == 0x00^{32}
+  SHA256(0x00 || K_C || V)     otherwise
+```
+
+Here `0x00` is `DOM_LEAF`, `V == Z[0]` is the unrevoked/empty leaf encoding,
+and `V != Z[0]` is a populated leaf.
+
+For `d = 0..255`, consume the next packed sibling only when `M[d] == 1`;
+otherwise use `Z[d]`.
+
+```text
+if M[d] == 1:
+    s[d] = next 32-byte digest from S
+else:
+    s[d] = Z[d]
+
+if b[d] == 0:
+    N[d+1] = SHA256(0x01 || N[d] || s[d])
+else:
+    N[d+1] = SHA256(0x01 || s[d] || N[d])
+```
+
+At least 256 iterations are mandatory. The terminal result is `N[256]`.
+
+The canonical wire encoding of a non-zero revocation value and its
+`DOM_ENTRY` preimage are not yet ratified. `V != Z[0]` therefore establishes
+revocation only after a valid reconstruction; it does not establish a
+revocation-record schema. Implementations must not infer or invent a
+`DOM_ENTRY` structure until a dedicated specification update is ratified.
+
+#### 6. Authenticated-root comparison
+
+Compare `N[256]` against `E.smt_root`. `E.smt_root` must come from an
+independently signature-verified, non-expired identity epoch whose authority
+and epoch sequence are valid.
+
+| Condition | Bounded verdict | Operational consequence |
+|---|---|---|
+| Epoch unavailable or authority evidence unavailable | `INDETERMINATE` | Halt fail-closed; log uncertainty |
+| Epoch signature invalid or epoch expired/regressed | `INVALID` | Halt fail-closed; emit refusal receipt |
+| Proof or capability field missing | `UNVERIFIED` | Deny transition; request evidence |
+| Proof decoding fails, or `N[256] != E.smt_root` | `INVALID` | Halt fail-closed; emit refusal receipt |
+| `N[256] == E.smt_root` and `V == Z[0]` | `VERIFIED` (non-revoked) | Continue to HARC evaluation |
+| `N[256] == E.smt_root` and `V != Z[0]` | `REVOKED` | Quarantine capability; emit refusal receipt |
+
+No verdict other than a fully verified non-revocation determination may
+authorize the revocation predicate. `Z[256]` is not a substitute for a
+populated epoch root.
+
+#### 7. Known-answer conformance vectors
+
+Hexadecimal encodings below use lower-case 32-byte digests.
+
+**Vector 1: positive non-inclusion against the empty epoch**
+
+- Issuer: `did:tas:root:test`
+- Capability: `cap:exec:001`
+- UTF-8 length encodings:
+  - `I`: `000000116469643a7461733a726f6f743a74657374`
+  - `C`: `0000000c6361703a657865633a303031`
+- Derived capability key:
+  `d2e6084c18986cadb4faea9fae40111940a3eebd4c389cb0bc62a196e680ea08`
+- `E.smt_root`:
+  `6155289130893872355eac98042d22aefa2c2e708bea169402760e3b55f9a2dc`
+- `V`: `0000000000000000000000000000000000000000000000000000000000000000`
+- `M`: `0000000000000000000000000000000000000000000000000000000000000000`
+- `S`: empty
+- Expected: `N[256]` equals `E.smt_root`, so the verdict is `VERIFIED`.
+
+**Vector 2: wrong capability key**
+
+- Attacker supplies a proof generated for `cap:read:001`.
+- Verifier instead derives `K_C` for `I = did:tas:root:test`,
+  `C = cap:admin:999`.
+- The proof must be ignored for key derivation and `N[256]` must be computed
+  with the independently derived key.
+- Expected: for a populated epoch root, traversal mismatch gives
+  `N[256] != E.smt_root`, so the verdict is `INVALID`.
+
+**Vector 3: wrong/forged root**
+
+- `V`, `M`, and `S` are the empty-proof values from Vector 1.
+- `E.smt_root` is a validly signed populated-epoch placeholder:
+  `9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08`.
+- Reconstruction yields `Z[256]`, not the supplied populated root.
+- Expected: `N[256] != E.smt_root`, so the verdict is `INVALID`. This blocks
+  the value-zero/root-bypass defect model in PR #114.
+
+**Vector 4: malformed explicit-default sibling**
+
+- Set `M[0] = 1`, using `M[31]` bit 0 and the little-endian mask encoding.
+- Pack `Z[0]` as `S[0]`.
+- Expected: `INVALID` before reconstruction.
+
+**Vector 5: positive revocation leaf**
+
+The following vector uses `0x01^{32}` only as a 32-byte test sentinel. The
+canonical `DOM_ENTRY` revocation value is unresolved and must not be inferred
+from this sentinel.
+
+- Issuer: `did:tas:root:test`
+- Capability: `cap:exec:001`
+- Derived key:
+  `d2e6084c18986cadb4faea9fae40111940a3eebd4c389cb0bc62a196e680ea08`
+- `V`: `0101010101010101010101010101010101010101010101010101010101010101`
+- `M`: `ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff`
+- `S`: concatenation of `Z[0]` through `Z[255]`, where each `Z[d]` is obtained
+  by the inherited recurrence.
+- `N[0]`:
+  `e36b2bff469b217541c0f49e8c987f31045c2518c8cb86ca339a42dcb3dc26bb`
+- Terminal root:
+  `06255444de3296aeea58a297efbf993db35a2925b29100ce4a005453660d1c77`
+- Expected: if that terminal root is `E.smt_root`, the verdict is `REVOKED`.

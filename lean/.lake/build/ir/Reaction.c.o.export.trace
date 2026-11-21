@@ -1,5 +1,0 @@
-{"log":
- [{"message":
-   ".> /home/runner/.elan/toolchains/leanprover--lean4---v4.11.0/bin/leanc -c -o ././.lake/build/ir/Reaction.c.o.export ././.lake/build/ir/Reaction.c -O3 -DNDEBUG -DLEAN_EXPORTING",
-   "level": "trace"}],
- "depHash": "4914960565634932936"}
